@@ -1,0 +1,15 @@
+{% extends "base.html.j2" %}
+{% block content %}
+  {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
+  <h2 class="headline cta-headline">{{ headline_html | safe }}</h2>
+  <p class="subhead">{{ body }}</p>
+  <div class="cta-pill">{{ cta }}</div>
+  <div class="contact">
+    {% if contact.email %}<div class="row"><span class="ic">&#9993;</span>{{ contact.email }}</div>{% endif %}
+    {% if contact.phone %}<div class="row"><span class="ic">&#9742;</span>{{ contact.phone }}</div>{% endif %}
+    {% if contact.address %}<div class="row"><span class="ic">&#9678;</span>{{ contact.address }}</div>{% endif %}
+  </div>
+{% endblock %}
+{% block footer %}
+  <div class="counter">{{ index }}/{{ total }}</div>
+{% endblock %}

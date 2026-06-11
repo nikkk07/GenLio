@@ -49,19 +49,69 @@ def slugify(text: str, max_len: int = MAX_SLUG_LEN) -> str:
     return text
 
 
-def _load_bank(path: Path) -> list[str]:
+# Default cross-category weights (favor shareable, curiosity-driven angles).
+# Overridable via brand.json "topic_weights".
+DEFAULT_WEIGHTS = {
+    "myth_busting": 3,
+    "career_truth": 3,
+    "process": 2,
+    "psychology": 2,
+}
+
+
+def _read_bank(path: Path) -> tuple[dict[str, list[str]], str]:
+    """Load the topic bank as ordered categories + its on-disk shape.
+
+    Supports both the flat ``{"concepts": [...]}`` shape (-> a single
+    ``psychology`` category, shape ``"flat"``) and the categorized
+    ``{"categories": {name: [...]}}`` shape (shape ``"categories"``).
+    """
     data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data.get("categories"), dict):
+        cats = {
+            str(name): [str(c).strip() for c in items if str(c).strip()]
+            for name, items in data["categories"].items()
+        }
+        if not any(cats.values()):
+            raise TopicEngineError(f"topic bank at {path} has no concepts")
+        return cats, "categories"
     concepts = data.get("concepts", [])
     if not isinstance(concepts, list) or not concepts:
         raise TopicEngineError(f"topic bank at {path} has no concepts")
-    return [str(c).strip() for c in concepts if str(c).strip()]
+    return {"psychology": [str(c).strip() for c in concepts if str(c).strip()]}, "flat"
 
 
-def _save_bank(path: Path, concepts: list[str]) -> None:
+def _save_bank(path: Path, categories: dict[str, list[str]], shape: str) -> None:
+    if shape == "categories":
+        payload: dict[str, Any] = {"categories": categories}
+    else:
+        flat: list[str] = []
+        for items in categories.values():
+            flat.extend(items)
+        payload = {"concepts": flat}
     path.write_text(
-        json.dumps({"concepts": concepts}, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+
+
+def _weighted_order(
+    categories: dict[str, list[str]], weights: dict[str, float]
+) -> list[str]:
+    """Deterministic weight-proportional interleave across categories.
+
+    A single category returns its concepts in original order (so flat banks keep
+    their first-unused-in-order behavior).
+    """
+    queues = {name: list(items) for name, items in categories.items() if items}
+    counters = {name: 0.0 for name in queues}
+    order: list[str] = []
+    while any(queues.values()):
+        live = [n for n in queues if queues[n]]
+        # pick the category most "owed" relative to its weight (stable tie-break)
+        name = min(live, key=lambda n: counters[n] / max(weights.get(n, 1), 1e-6))
+        order.append(queues[name].pop(0))
+        counters[name] += 1
+    return order
 
 
 class TopicEngine:
@@ -82,21 +132,25 @@ class TopicEngine:
     # -- concept selection ---------------------------------------------------
     def _next_concept(self) -> str:
         used = {c.lower() for c in self._store.used_concepts()}
-        bank = _load_bank(self._bank_path)
+        categories, shape = _read_bank(self._bank_path)
+        weights = {**DEFAULT_WEIGHTS, **self._brand.get("topic_weights", {})}
 
-        for concept in bank:
+        for concept in _weighted_order(categories, weights):
             if concept.lower() not in used:
                 return concept
 
         logger.info("topic bank exhausted; requesting fresh concepts from LLM")
-        fresh = self._replenish_bank(bank, used)
+        fresh = self._replenish_bank(categories, shape, used)
         for concept in fresh:
             if concept.lower() not in used:
                 return concept
         raise TopicEngineError("unable to find an unused concept even after refill")
 
-    def _replenish_bank(self, bank: list[str], used: set[str]) -> list[str]:
+    def _replenish_bank(
+        self, categories: dict[str, list[str]], shape: str, used: set[str]
+    ) -> list[str]:
         """Ask the LLM for 10 new concepts, keep only genuinely-new ones."""
+        bank = [c for items in categories.values() for c in items]
         existing_lower = {c.lower() for c in bank} | used
         system = (
             "You are a psychology curriculum designer for an aviation training "
@@ -121,8 +175,10 @@ class TopicEngine:
         if not new_concepts:
             raise TopicEngineError("LLM proposed no genuinely new concepts")
 
-        merged = bank + new_concepts
-        _save_bank(self._bank_path, merged)
+        # Append fresh concepts to the psychology category (preserving on-disk shape).
+        categories.setdefault("psychology", [])
+        categories["psychology"].extend(new_concepts)
+        _save_bank(self._bank_path, categories, shape)
         logger.info("appended %d new concepts to bank", len(new_concepts))
         return new_concepts
 
@@ -148,7 +204,7 @@ class TopicEngine:
         audience = self._brand.get("audience", "aspiring pilots / DGCA aspirants")
         tone = self._brand.get("tone", "authoritative but encouraging")
 
-        angle, hook = self._llm_angle_and_hook(concept, audience, tone)
+        angle, hook, eyebrow = self._llm_angle_and_hook(concept, audience, tone)
 
         try:
             return Brief(
@@ -159,13 +215,14 @@ class TopicEngine:
                 hook=hook,
                 audience=audience,
                 tone=tone,
+                eyebrow=eyebrow or None,
             )
         except ValidationError as exc:
             raise TopicEngineError(f"brief failed validation: {exc}") from exc
 
     def _llm_angle_and_hook(
         self, concept: str, audience: str, tone: str
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         system = (
             f"You are gelio, content strategist for {self._brand.get('name')}, "
             f"an aviation training academy. Brand voice: "
@@ -174,12 +231,13 @@ class TopicEngine:
             "individuals. Output JSON only."
         )
         user = (
-            f"Map the psychology concept '{concept}' onto the lived reality of "
-            "aviation / DGCA / pilot-training life. Return JSON with exactly two "
-            "keys:\n"
+            f"Frame the topic '{concept}' for the lived reality of aviation / DGCA "
+            "/ pilot-training life. Favour a genuinely shareable, curiosity-driven "
+            "angle. Return JSON with exactly three keys:\n"
             '  "aviation_angle": one sentence describing the specific pilot-life '
             "angle (e.g. why pilots err at the end of long duty days),\n"
-            '  "hook": one scroll-stopping first-line hook (max 90 chars).\n'
+            '  "hook": one scroll-stopping first-line hook (max 90 chars),\n'
+            '  "eyebrow": a 2-4 word UPPERCASE label (e.g. "THE REAL CHALLENGE").\n'
             "Make it concrete, fresh, and emotionally resonant for aspiring pilots.\n"
             "Return ONLY valid JSON. Every string value MUST be wrapped in double "
             "quotes and any internal quotes escaped."
@@ -187,8 +245,9 @@ class TopicEngine:
         data = self._llm.generate_json(system, user)
         angle = str(data.get("aviation_angle", "")).strip()
         hook = str(data.get("hook", "")).strip()
+        eyebrow = str(data.get("eyebrow", "")).strip()
         if not angle or not hook:
             raise TopicEngineError(
                 f"LLM returned incomplete angle/hook for {concept!r}: {data}"
             )
-        return angle, hook
+        return angle, hook, eyebrow

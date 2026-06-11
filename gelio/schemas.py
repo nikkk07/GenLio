@@ -66,6 +66,8 @@ class Brief(BaseModel):
     hook: str = Field(..., min_length=5)
     audience: str = Field(...)
     tone: str = Field(...)
+    # Phase 3.5: short gold eyebrow label for the carousel (additive, optional).
+    eyebrow: str | None = None
 
 
 class Slide(BaseModel):
@@ -78,6 +80,12 @@ class Slide(BaseModel):
     headline: Annotated[str, Field(min_length=1, max_length=HEADLINE_MAX)]
     body: Annotated[str, Field(min_length=1, max_length=BODY_MAX)]
     visual_direction: str = Field(..., min_length=3)
+    # Phase 3.5 (all additive/optional so pre-3.5 artifacts still validate):
+    # photorealistic image-gen prompt, headline keywords to gold-highlight, and a
+    # short eyebrow label.
+    image_prompt: str | None = None
+    highlight: list[str] = Field(default_factory=list)
+    eyebrow: str | None = None
 
 
 class Captions(BaseModel):

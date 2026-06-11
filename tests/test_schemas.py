@@ -30,6 +30,37 @@ def _valid_slide(**overrides):
     return Slide(**base)
 
 
+def test_phase35_fields_are_additive_and_optional():
+    # Legacy slide dict (pre-3.5) without the new fields still validates.
+    legacy = _valid_slide()
+    assert legacy.image_prompt is None
+    assert legacy.highlight == []
+    assert legacy.eyebrow is None
+
+    # New fields are accepted when present.
+    rich = _valid_slide(
+        image_prompt="a cinematic cockpit at dawn",
+        highlight=["short"],
+        eyebrow="THE MYTH",
+    )
+    assert rich.image_prompt.startswith("a cinematic")
+    assert rich.highlight == ["short"]
+    assert rich.eyebrow == "THE MYTH"
+
+
+def test_brief_eyebrow_optional():
+    brief = Brief(
+        id="2026-06-11-x",
+        date="2026-06-11",
+        concept="Decision Fatigue",
+        aviation_angle="why pilots err late",
+        hook="the mistake tired pilots make",
+        audience="aspiring pilots",
+        tone="encouraging",
+    )
+    assert brief.eyebrow is None
+
+
 def test_brief_roundtrip():
     brief = Brief(
         id="2026-06-11-decision-fatigue",

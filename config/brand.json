@@ -19,13 +19,26 @@
     "#cockpit",
     "#avgeek"
   ],
+  "contact": {
+    "name": "We One Aviation",
+    "email": "info.weoneaviation@gmail.com",
+    "phone": "+91-9667370747",
+    "address": "C-404, Ramphal Chowk, Dwarka Sector 7, Delhi"
+  },
   "visual": {
-    "primary_color": "#0B3D91",
-    "accent_color": "#F5A623",
-    "background_tint": "#0A1F3D",
-    "text_color": "#FFFFFF",
-    "style_suffix": "clean modern flat illustration, aviation theme, bright, minimal, high contrast, no text, no letters, no words",
+    "navy": "#0A1F3D",
+    "navy_panel": "#0A1A33",
+    "blue": "#0B3D91",
+    "gold": "#E8B33D",
+    "text": "#FFFFFF",
+    "muted": "#C9D4E5",
+    "slide_size": [1080, 1350],
     "logo_path": "assets/logo.png",
-    "slide_size": [1080, 1350]
+    "headline_font": "Montserrat",
+    "body_font": "Inter",
+    "primary_color": "#0B3D91",
+    "accent_color": "#E8B33D",
+    "background_tint": "#0A1F3D",
+    "text_color": "#FFFFFF"
   }
 }

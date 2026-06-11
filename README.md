@@ -20,6 +20,15 @@ Requires **Python 3.11+**.
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python run.py setup-assets       # downloads brand fonts + installs Chromium
+```
+
+`setup-assets` fetches the Montserrat/Inter variable fonts and runs
+`playwright install chromium` (the compositor renders slides as HTML screenshots).
+On Linux/CI also install the browser's system libraries:
+
+```bash
+python run.py setup-assets --with-deps        # or: playwright install --with-deps chromium
 ```
 
 Configure secrets (keys live only in `.env`, which is git-ignored):
@@ -38,7 +47,12 @@ cp .env.example .env
 | `GROQ_MODEL`      | no       | `llama-3.3-70b-versatile`  | Any current free Llama 3.x model.                |
 | `GEMINI_API_KEY`  | yes\*    | —                          | Free key (starts with `AIza`): https://aistudio.google.com/app/apikey |
 | `GEMINI_MODEL`    | no       | `gemini-2.0-flash`         | Gemini free-tier model.                          |
-| `POLLINATIONS_TOKEN` | no    | —                          | Optional; raises image-API quota (Phase 2).      |
+| `CLOUDFLARE_ACCOUNT_ID` | for AI images | —              | Workers AI account id (Phase 3.5 primary).       |
+| `CLOUDFLARE_API_TOKEN`  | for AI images | —              | Token with the **Workers AI** permission.        |
+| `CLOUDFLARE_IMAGE_MODEL`| no       | `@cf/black-forest-labs/flux-1-schnell` | Override the image model.     |
+| `TOGETHER_API_KEY`| no       | —                          | Optional fallback image provider (FLUX schnell). |
+| `TOGETHER_IMAGE_MODEL` | no  | `black-forest-labs/FLUX.1-schnell-Free` | Override Together model.       |
+| `POLLINATIONS_TOKEN` | no    | —                          | Legacy (Phase 2); no longer in the image chain.  |
 | `TELEGRAM_BOT_TOKEN` | for approval | —                  | BotFather token (Phase 3).                       |
 | `TELEGRAM_ADMIN_CHAT_ID` | for approval | —              | Only this chat may drive the bot (Phase 3).      |
 | `SUPABASE_URL`    | no       | —                          | Set to enable dashboard sync; blank = disabled.  |
@@ -117,15 +131,18 @@ and inserts a `DRAFTED` row into `data/gelio.db` (stamped with `rendered_at`
 after a successful render — the state stays `DRAFTED`; approval is Phase 3).
 
 **Architecture rule:** the AI image model **never renders text** — it only
-generates backgrounds from each slide's `visual_direction`. All typography
-(headline, body, slide number, logo/wordmark, CTA pill) is stamped
-programmatically by the Pillow compositor, so branding is pixel-perfect and
-identical every day.
+generates a photographic background from each slide's `image_prompt`. All
+typography (eyebrow, gold-highlighted headline, body, logo/wordmark, Swipe pill,
+counter, CTA contact block) is stamped by the **HTML/CSS compositor** rendered
+with **Playwright/Chromium**, so branding is pixel-perfect and identical every
+day. Templates live in `gelio/templates/` (`base` + `hook`/`insight`/`cta` +
+`styles.css`); fonts are embedded as `@font-face` for offline determinism.
 
-**Image provider:** Pollinations.ai (free, keyless) is primary; if it is rate-
-limited or down, gelio falls back to a locally generated **branded gradient** so
-a run never dies. Each slide logs `source=pollinations` or `source=fallback`.
-An optional `POLLINATIONS_TOKEN` in `.env` raises the free-tier quota.
+**Image provider chain (Phase 3.5):** each is feature-flagged on its env keys and
+tried in order — **Cloudflare Workers AI** (`flux-1-schnell`) → **Together AI**
+(`FLUX.1-schnell-Free`) → a locally generated **branded gradient** that never
+fails. Each slide logs `source=cloudflare|together|gradient`. With no image keys
+set, every slide uses the gradient and the run still completes.
 
 **No-repeat guarantee:** concepts already used (tracked in SQLite) are excluded.
 When the 30-concept bank is exhausted, gelio asks the LLM for 10 fresh concepts,
@@ -171,19 +188,20 @@ require **no network and no API keys**.
 
 ```
 config/settings.py    typed settings from env + brand.json
-config/brand.json     brand kit (name, CTA, tone, audience, hashtags)
-data/topic_bank.json  30 seeded psychology concepts (auto-extends)
+config/brand.json     brand kit (name, CTA, contact, visual tokens, hashtags)
+data/topic_bank.json  topics by category (myth_busting/career_truth/process/psychology)
 data/gelio.db         SQLite (created at runtime)
 
 gelio/schemas.py        Pydantic contracts: Brief, Slide, Content, PostRecord
 gelio/store.py          SQLite: topic dedup, run history, post state machine
 gelio/llm.py            provider abstraction: Groq primary + Gemini fallback,
                         retry/backoff, JSON-mode, fence-stripping
-gelio/topic_engine.py   pick unused concept -> aviation angle -> Brief
-gelio/content_writer.py Brief -> Content, 3x validate-and-retry loop
+gelio/topic_engine.py   weighted category pick -> angle/hook/eyebrow -> Brief
+gelio/content_writer.py Brief -> Content (+image_prompt/highlight), retry loop
 gelio/validators.py     business rules (slide roles, limits, CTA slide)
-gelio/visual_gen.py     backgrounds: Pollinations -> gradient fallback (Phase 2)
-gelio/compositor.py     stamp branded typography over backgrounds (Phase 2)
+gelio/visual_gen.py     AI backgrounds: Cloudflare -> Together -> gradient (3.5)
+gelio/compositor.py     HTML/CSS templates -> Playwright screenshot (3.5)
+gelio/templates/        Jinja2 base + hook/insight/cta + styles.css (3.5)
 gelio/pdf_builder.py    composited slides -> carousel.pdf (Phase 2)
 gelio/assets.py         download brand fonts (setup-assets)
 gelio/approval.py       Telegram approval gate: preview, buttons, regen (Phase 3)
@@ -240,26 +258,36 @@ Slide roles: slide 1 = `hook`, slides 2..N-1 = `insight`, last slide = `cta`
 Validators enforce: slide count, char limits, exactly one hook first and one cta
 last, caption limits, and 5–10 hashtags.
 
-### `brand.json` → `visual` (Phase 2)
+### `brand.json` → `contact` + `visual` (Phase 3.5)
 
 ```json
 {
+  "contact": {
+    "name": "We One Aviation",
+    "email": "info.weoneaviation@gmail.com",
+    "phone": "+91-9667370747",
+    "address": "C-404, Ramphal Chowk, Dwarka Sector 7, Delhi"
+  },
   "visual": {
-    "primary_color": "#0B3D91",
-    "accent_color": "#F5A623",
-    "background_tint": "#0A1F3D",
-    "text_color": "#FFFFFF",
-    "style_suffix": "clean modern flat illustration, aviation theme, bright, minimal, high contrast, no text, no letters, no words",
+    "navy": "#0A1F3D", "navy_panel": "#0A1A33", "blue": "#0B3D91",
+    "gold": "#E8B33D", "text": "#FFFFFF", "muted": "#C9D4E5",
+    "slide_size": [1080, 1350],
     "logo_path": "assets/logo.png",
-    "slide_size": [1080, 1350]
+    "headline_font": "Montserrat", "body_font": "Inter"
   }
 }
 ```
 
-- `style_suffix` is appended to every `visual_direction` so the look stays
-  consistent; "no text/no letters" suppresses stray AI typography.
-- If `assets/logo.png` is missing, the compositor renders the academy name as a
-  styled text wordmark — slides are never left unbranded and never crash.
+- `contact` renders on the CTA slide (email / phone / address with gold icons).
+- `visual` tokens theme the templates via CSS variables; `slide_size` defaults to
+  4:5 (1080×1350, best for LinkedIn + Instagram) — set `[1080, 1080]` for square.
+- A fixed photographic style suffix is appended to every `image_prompt` in
+  `content_writer.py` (not brand.json) so the look stays consistent.
+- **Logo:** drop a PNG/SVG at `assets/logo.png` (embedded as a data URI at
+  render time). If absent, the compositor renders a gold "WE ONE AVIATION"
+  wordmark — slides are never unbranded and never crash.
+- **CI note:** in GitHub Actions run `playwright install --with-deps chromium`
+  before rendering.
 
 ### Post state machine (SQLite)
 ```

@@ -12,7 +12,7 @@ import io
 from PIL import Image
 
 from config.settings import Settings
-from gelio.compositor import Compositor, FontSet
+from gelio.compositor import Compositor
 from gelio.pipeline import Pipeline, Renderer
 from gelio.schemas import PostState
 from gelio.store import Store
@@ -20,15 +20,24 @@ from gelio.visual_gen import GradientFallback, VisualGenerator
 from tests.conftest import BRAND, FakeLLM
 
 
+class _StubShot:
+    """Stand-in for Playwright: returns a tiny valid PNG, no browser."""
+
+    def screenshot(self, html, width, height) -> bytes:
+        buf = io.BytesIO()
+        Image.new("RGB", (16, 20), (0, 0, 0)).save(buf, "PNG")
+        return buf.getvalue()
+
+
 def _fake_visualgen() -> VisualGenerator:
     """A VisualGenerator with no API provider -> always uses the gradient."""
     v = BRAND["visual"]
-    fb = GradientFallback(v["primary_color"], v["background_tint"], v["accent_color"])
-    return VisualGenerator(primary=None, fallback=fb)
+    fb = GradientFallback(v["blue"], v["navy"], v["gold"])
+    return VisualGenerator(providers=[], gradient=fb)
 
 
 def _fake_renderer(settings: Settings, store: Store) -> Renderer:
-    compositor = Compositor(BRAND, FontSet.fallback(), logo_path=None)
+    compositor = Compositor(BRAND, screenshotter=_StubShot(), fonts_dir=None, logo_path=None)
     return Renderer(settings, _fake_visualgen(), store, compositor=compositor)
 
 
@@ -120,7 +129,7 @@ def test_generate_with_render_end_to_end(tmp_path):
     assert all(p.exists() for p in rr.slide_paths)
     assert rr.pdf_path.exists()
     # All backgrounds came from the gradient fallback in tests.
-    assert set(rr.sources) == {"fallback"}
+    assert set(rr.sources) == {"gradient"}
 
     # Each slide is exactly 1080x1350.
     for p in rr.slide_paths:

@@ -1,0 +1,6 @@
+{% extends "base.html.j2" %}
+{% block content %}
+  {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
+  <h1 class="headline hook-headline">{{ headline_html | safe }}</h1>
+  <p class="subhead">{{ body }}</p>
+{% endblock %}

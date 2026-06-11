@@ -17,7 +17,7 @@ import sys
 
 from gelio import configure_logging
 from gelio.approval import ApprovalError, build_approval
-from gelio.assets import AssetError, setup_fonts
+from gelio.assets import AssetError, setup_assets
 from gelio.compositor import CompositorError
 from gelio.content_writer import ContentWriterError
 from gelio.llm import LLMError
@@ -59,11 +59,9 @@ def _print_render(render: RenderResult) -> None:
     if render.skipped:
         print(f"  render:  skipped (slides already complete) -> {render.pdf_path}")
         return
-    api = render.sources.count("pollinations")
-    fb = render.sources.count("fallback")
+    by_source = {s: render.sources.count(s) for s in sorted(set(render.sources))}
     print(
-        f"  render:  {len(render.slide_paths)} slides "
-        f"(api={api}, fallback={fb}) -> {render.pdf_path}"
+        f"  render:  {len(render.slide_paths)} slides {by_source} -> {render.pdf_path}"
     )
 
 
@@ -127,10 +125,11 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 def cmd_setup_assets(args: argparse.Namespace) -> int:
     settings = load_settings()
-    paths = setup_fonts(settings.fonts_dir, force=args.force)
+    paths = setup_assets(settings.fonts_dir, force=args.force, with_deps=args.with_deps)
     print("Fonts ready:")
     for p in paths:
         print(f"  {p}")
+    print("Chromium installed for Playwright rendering.")
     return 0
 
 
@@ -176,9 +175,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rnd.set_defaults(func=cmd_render)
 
-    setup = sub.add_parser("setup-assets", help="download brand fonts into assets/fonts")
+    setup = sub.add_parser(
+        "setup-assets", help="download brand fonts + install Playwright Chromium"
+    )
     setup.add_argument(
         "--force", action="store_true", help="re-download even if fonts exist"
+    )
+    setup.add_argument(
+        "--with-deps",
+        action="store_true",
+        help="also install OS deps for Chromium (Linux/CI)",
     )
     setup.set_defaults(func=cmd_setup_assets)
 

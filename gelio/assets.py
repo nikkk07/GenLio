@@ -1,13 +1,16 @@
-"""Asset bootstrap: download open-license brand fonts for the compositor.
+"""Asset bootstrap: brand fonts (Montserrat/Inter) + Playwright Chromium.
 
-Fetched from the Google Fonts GitHub mirror (raw static TTFs, both SIL Open Font
-License). Binary fonts are NOT committed — ``assets/fonts/`` is git-ignored and
-populated on demand via ``python run.py setup-assets``.
+Fonts are fetched from the Google Fonts GitHub mirror (variable TTFs, SIL Open
+Font License); the templates embed them via @font-face so Chromium renders
+deterministically offline. Binaries are NOT committed — ``assets/fonts/`` is
+git-ignored and populated on demand via ``python run.py setup-assets``.
 """
 
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -15,15 +18,16 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 logger = logging.getLogger("gelio.assets")
 
-# name -> (filename, url). Verified reachable (HTTP 200) at build time.
+# name -> (filename, url). Variable fonts cover all weights via CSS font-weight;
+# verified reachable (HTTP 200) at build time.
 FONTS: dict[str, tuple[str, str]] = {
     "headline": (
-        "Poppins-Bold.ttf",
-        "https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf",
+        "Montserrat-Variable.ttf",
+        "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf",
     ),
     "body": (
-        "Lato-Regular.ttf",
-        "https://github.com/google/fonts/raw/main/ofl/lato/Lato-Regular.ttf",
+        "Inter-Variable.ttf",
+        "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf",
     ),
 }
 
@@ -69,3 +73,31 @@ def setup_fonts(fonts_dir: Path, *, force: bool = False) -> list[Path]:
         written.append(dest)
         logger.info("saved font %s (%d bytes)", dest, len(data))
     return written
+
+
+def install_chromium(*, with_deps: bool = False) -> None:
+    """Install the Playwright Chromium browser used by the compositor.
+
+    On Linux/CI add system libs with ``with_deps=True`` (``playwright install
+    --with-deps chromium``).
+    """
+    cmd = [sys.executable, "-m", "playwright", "install"]
+    if with_deps:
+        cmd.append("--with-deps")
+    cmd.append("chromium")
+    logger.info("installing playwright chromium: %s", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError as exc:  # playwright not installed
+        raise AssetError(
+            "playwright is not installed. `pip install -r requirements.txt` first."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise AssetError(f"`playwright install chromium` failed: {exc}") from exc
+
+
+def setup_assets(fonts_dir: Path, *, force: bool = False, with_deps: bool = False) -> list[Path]:
+    """Download brand fonts and install Chromium. Returns the font paths."""
+    paths = setup_fonts(fonts_dir, force=force)
+    install_chromium(with_deps=with_deps)
+    return paths

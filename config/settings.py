@@ -62,6 +62,12 @@ class Settings:
     # Optional Pollinations token for registered (higher-quota) access; the
     # gradient fallback works fine without it, so this is never required.
     pollinations_token: str = ""
+    # Phase 3.5: AI image providers (feature-flagged on key presence).
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: str = ""
+    cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"
+    together_api_key: str = ""
+    together_image_model: str = "black-forest-labs/FLUX.1-schnell-Free"
     # Phase 3: Telegram approval gate.
     telegram_bot_token: str = ""
     telegram_admin_chat_id: str = ""
@@ -116,6 +122,15 @@ def load_settings() -> Settings:
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip(),
         brand=brand,
         pollinations_token=os.getenv("POLLINATIONS_TOKEN", "").strip(),
+        cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip(),
+        cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN", "").strip(),
+        cloudflare_image_model=os.getenv(
+            "CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell"
+        ).strip(),
+        together_api_key=os.getenv("TOGETHER_API_KEY", "").strip(),
+        together_image_model=os.getenv(
+            "TOGETHER_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell-Free"
+        ).strip(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_admin_chat_id=os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip(),
         supabase_url=os.getenv("SUPABASE_URL", "").strip().rstrip("/"),

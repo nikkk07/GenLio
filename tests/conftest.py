@@ -13,14 +13,21 @@ BRAND: dict[str, Any] = {
     "tone": "authoritative but encouraging",
     "audience": "aspiring pilots / DGCA aspirants",
     "voice": "Bright, simple, psychologically engaging.",
+    "contact": {
+        "name": "We One Aviation",
+        "email": "info.weoneaviation@gmail.com",
+        "phone": "+91-9667370747",
+        "address": "C-404, Ramphal Chowk, Dwarka Sector 7, Delhi",
+    },
     "visual": {
-        "primary_color": "#0B3D91",
-        "accent_color": "#F5A623",
-        "background_tint": "#0A1F3D",
-        "text_color": "#FFFFFF",
-        "style_suffix": "clean modern flat illustration, aviation theme, no text",
-        "logo_path": "assets/logo.png",
+        "navy": "#0A1F3D",
+        "navy_panel": "#0A1A33",
+        "blue": "#0B3D91",
+        "gold": "#E8B33D",
+        "text": "#FFFFFF",
+        "muted": "#C9D4E5",
         "slide_size": [1080, 1350],
+        "logo_path": "assets/logo.png",
     },
 }
 
@@ -32,9 +39,12 @@ def make_content_dict(concept_id: str, slides: int, brand: dict[str, Any]) -> di
         {
             "index": 1,
             "role": "hook",
+            "eyebrow": "THE REAL CHALLENGE",
             "headline": "The hook that stops the scroll",
+            "highlight": ["hook"],
             "body": "A curiosity gap that pulls aspiring pilots in.",
             "visual_direction": "cockpit at dawn, pilot silhouette",
+            "image_prompt": "young Indian pilot center-right, open sky on the left",
         }
     ]
     for i in range(2, slides):
@@ -42,18 +52,24 @@ def make_content_dict(concept_id: str, slides: int, brand: dict[str, Any]) -> di
             {
                 "index": i,
                 "role": "insight",
+                "eyebrow": f"POINT {i}",
                 "headline": f"Insight number {i}",
+                "highlight": ["Insight"],
                 "body": f"One concrete idea {i} with a DGCA training example.",
                 "visual_direction": "training classroom, charts on wall",
+                "image_prompt": "student near a small aircraft, sky on the left",
             }
         )
     slide_list.append(
         {
             "index": slides,
             "role": "cta",
+            "eyebrow": "READY TO SOAR",
             "headline": f"Fly with {academy}",
+            "highlight": [academy],
             "body": f"{academy} mentors you to the cockpit. {brand['cta_text']}",
             "visual_direction": "branded card, runway background",
+            "image_prompt": "commercial cockpit at dawn",
         }
     )
     return {

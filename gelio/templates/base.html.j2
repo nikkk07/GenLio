@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+:root {
+  --navy: {{ c.navy }};
+  --navy-panel: {{ c.navy_panel }};
+  --blue: {{ c.blue }};
+  --gold: {{ c.gold }};
+  --text: {{ c.text }};
+  --muted: {{ c.muted }};
+}
+{{ font_faces | safe }}
+{% include "styles.css" %}
+</style>
+</head>
+<body>
+  <div class="slide role-{{ role }}" style="width:{{ w }}px;height:{{ h }}px;">
+    <img class="bg" src="{{ bg_data_uri }}" alt="">
+    <div class="scrim-left"></div>
+    <div class="scrim-bottom"></div>
+
+    <svg class="plane-trail" viewBox="0 0 360 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M10 280 C 120 240, 210 150, 350 30" stroke="{{ c.gold }}" stroke-width="3"
+            stroke-linecap="round" stroke-dasharray="2 16"/>
+      <path d="M333 18 l22 6 l-12 18 z" fill="{{ c.gold }}"/>
+    </svg>
+
+    <header class="topbar">
+      {% if logo_data_uri %}
+        <img class="logo" src="{{ logo_data_uri }}" alt="{{ academy }}">
+      {% else %}
+        <div class="wordmark">{{ wordmark }}</div>
+      {% endif %}
+      <div class="gold-rule"></div>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      {% block footer %}
+      <div class="counter">{{ index }}/{{ total }}</div>
+      <div class="swipe">Swipe &rarr;</div>
+      {% endblock %}
+    </footer>
+  </div>
+</body>
+</html>

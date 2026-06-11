@@ -32,6 +32,13 @@ logger = logging.getLogger("gelio.content_writer")
 
 MAX_ATTEMPTS = 3
 
+# Fixed style suffix appended to every image_prompt so the photographic look
+# stays consistent across days. "no text/letters/logo" suppresses stray AI text.
+IMAGE_STYLE_SUFFIX = (
+    "cinematic photography, golden hour, shallow depth of field, navy and gold "
+    "tone, high detail, no text, no watermark, no logo"
+)
+
 
 class ContentWriterError(RuntimeError):
     """Raised when valid Content cannot be produced within the retry budget."""
@@ -44,8 +51,19 @@ def _system_prompt(brand: dict[str, Any], brief: Brief) -> str:
         f"Audience: {brief.audience}. Tone: {brief.tone}. "
         "Write bright, simple, psychologically engaging language. "
         "All content must be 100% original: no copyrighted text, no song/movie "
-        "quotes, and no real individuals. Output JSON only — no prose, no code "
-        "fences."
+        "quotes, and no real individuals.\n\n"
+        "Each slide ALSO needs an `image_prompt` for a photorealistic AI image — "
+        "a CINEMATIC AVIATION SCENE relevant to that slide (e.g. a young Indian "
+        "pilot in a crisp uniform on the tarmac, a student studying manuals near a "
+        "small aircraft, a commercial cockpit at dawn). Composition rule for "
+        "automation: place the SUBJECT on the RIGHT or CENTER-RIGHT with open sky / "
+        "negative space on the LEFT, so left-aligned text never covers it. Use "
+        "Indian context wherever people appear. Do NOT append style words — the "
+        "system adds a fixed brand style suffix automatically.\n"
+        "Also give `highlight`: 1-2 key words copied VERBATIM from that slide's "
+        "headline, to be emphasised in gold. And `eyebrow`: a 2-4 word uppercase "
+        "label for the slide.\n"
+        "Output JSON only — no prose, no code fences."
     )
 
 
@@ -58,9 +76,13 @@ def _user_prompt(brand: dict[str, Any], brief: Brief, slides: int) -> str:
             {
                 "index": 1,
                 "role": "hook",
+                "eyebrow": "SHORT UPPERCASE LABEL",
                 "headline": f"<= {HEADLINE_MAX} chars",
+                "highlight": ["keyword", "from headline"],
                 "body": f"<= {BODY_MAX} chars",
-                "visual_direction": "short scene description for image gen",
+                "visual_direction": "short scene description",
+                "image_prompt": "photorealistic cinematic aviation scene; subject "
+                "center-right, open sky on the left",
             }
         ],
         "captions": {
@@ -124,6 +146,7 @@ class ContentWriter:
             # Force the CTA to come from brand.json — never trust the model here.
             raw["id"] = brief.id
             raw["cta"] = cta_text
+            _apply_image_style(raw)
 
             try:
                 content = Content.model_validate(raw)
@@ -147,6 +170,25 @@ class ContentWriter:
             f"failed to produce valid content for {brief.id} after "
             f"{MAX_ATTEMPTS} attempts; last errors: {last_errors}"
         )
+
+
+def _apply_image_style(raw: dict[str, Any]) -> None:
+    """Append the fixed brand style suffix to each slide's image_prompt.
+
+    Mutates ``raw`` in place; tolerant of malformed/partial LLM output (the
+    schema validation that follows will reject anything still invalid).
+    """
+    slides = raw.get("slides")
+    if not isinstance(slides, list):
+        return
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        prompt = slide.get("image_prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            base = prompt.strip().rstrip(".,")
+            if IMAGE_STYLE_SUFFIX not in base:
+                slide["image_prompt"] = f"{base}, {IMAGE_STYLE_SUFFIX}"
 
 
 def _feedback_block(errors: list[str]) -> str:

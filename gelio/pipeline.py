@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config.settings import Settings, load_settings
-from gelio.compositor import Compositor, FontSet
-from gelio.content_writer import ContentWriter
+from gelio.compositor import Compositor, PlaywrightScreenshotter
+from gelio.content_writer import IMAGE_STYLE_SUFFIX, ContentWriter
 from gelio.llm import JSONLLM, build_client
 from gelio.pdf_builder import build_pdf
 from gelio.schemas import Brief, Content, PostRecord, PostState
@@ -89,6 +89,7 @@ class Renderer:
         self._visual = visual
         self._store = store
         self._compositor = compositor
+        self._owns_compositor = False  # True when we lazily build (and must close) it
         self._sync = sync
 
     def _brief_angle(self, post_id: str) -> str | None:
@@ -103,10 +104,15 @@ class Renderer:
 
     def _get_compositor(self) -> Compositor:
         if self._compositor is None:
-            fonts = FontSet.from_dir(self._settings.fonts_dir, require=True)
             visual = self._settings.brand.get("visual", {})
             logo = self._settings.root_dir / visual.get("logo_path", "assets/logo.png")
-            self._compositor = Compositor(self._settings.brand, fonts, logo_path=logo)
+            self._compositor = Compositor(
+                self._settings.brand,
+                screenshotter=PlaywrightScreenshotter(),
+                fonts_dir=self._settings.fonts_dir,
+                logo_path=logo if logo.exists() else None,
+            )
+            self._owns_compositor = True
         return self._compositor
 
     def render(self, post_id: str, *, force: bool = False) -> RenderResult:
@@ -133,22 +139,30 @@ class Renderer:
         slides_dir.mkdir(parents=True, exist_ok=True)
         compositor = self._get_compositor()
         visual_cfg = self._settings.brand.get("visual", {})
-        style_suffix = visual_cfg.get("style_suffix", "")
         width, height = visual_cfg.get("slide_size", [1080, 1350])
 
         sources: list[str] = []
-        for slide in content.slides:
-            prompt = f"{slide.visual_direction}. {style_suffix}".strip()
-            seed = slide_seed(post_id, slide.index)
-            bg = self._visual.generate(prompt, width, height, seed)
-            (bg_dir / f"slide_{slide.index}.png").write_bytes(bg.data)
+        try:
+            for slide in content.slides:
+                prompt = slide.image_prompt or (
+                    f"{slide.visual_direction}, {IMAGE_STYLE_SUFFIX}"
+                )
+                seed = slide_seed(post_id, slide.index)
+                bg = self._visual.generate(prompt, width, height, seed)
+                (bg_dir / f"slide_{slide.index}.png").write_bytes(bg.data)
 
-            image, _meta = compositor.compose(slide, n, bg.data)
-            image.save(slides_dir / f"slide_{slide.index}.png", format="PNG")
-            sources.append(bg.source)
-            logger.info(
-                "rendered slide id=%s index=%d source=%s", post_id, slide.index, bg.source
-            )
+                image, _meta = compositor.compose(slide, n, bg.data)
+                image.save(slides_dir / f"slide_{slide.index}.png", format="PNG")
+                sources.append(bg.source)
+                logger.info(
+                    "rendered slide id=%s index=%d source=%s",
+                    post_id, slide.index, bg.source,
+                )
+        finally:
+            if self._owns_compositor:
+                compositor.close()
+                self._compositor = None
+                self._owns_compositor = False
 
         build_pdf(slide_paths, pdf_path)
 
@@ -159,13 +173,8 @@ class Renderer:
                 angle = self._brief_angle(post_id)
                 self._sync.push_render(record, content, slide_paths, pdf_path, angle)
 
-        logger.info(
-            "render complete id=%s slides=%d api=%d fallback=%d",
-            post_id,
-            n,
-            sources.count("pollinations"),
-            sources.count("fallback"),
-        )
+        by_source = {s: sources.count(s) for s in sorted(set(sources))}
+        logger.info("render complete id=%s slides=%d sources=%s", post_id, n, by_source)
         return RenderResult(
             post_id=post_id, slide_paths=slide_paths, pdf_path=pdf_path, sources=sources
         )
