@@ -1,0 +1,31 @@
+{
+  "name": "We One Aviation",
+  "tagline": "Your runway to the cockpit.",
+  "academy_short": "We One Aviation",
+  "cta_text": "DM We One Aviation today and start your DGCA journey with mentors who fly with you.",
+  "cta_url": "https://weoneaviation.example",
+  "tone": "authoritative but encouraging",
+  "audience": "aspiring pilots / DGCA aspirants",
+  "voice": "Bright, simple, psychologically engaging. Speaks to Indian aspiring pilots and DGCA aspirants with warmth and authority. No jargon walls, no fluff, no fear-mongering.",
+  "hashtags": [
+    "#aviation",
+    "#pilottraining",
+    "#DGCA",
+    "#aspiringpilot",
+    "#weoneaviation",
+    "#pilotlife",
+    "#aviationindia",
+    "#flighttraining",
+    "#cockpit",
+    "#avgeek"
+  ],
+  "visual": {
+    "primary_color": "#0B3D91",
+    "accent_color": "#F5A623",
+    "background_tint": "#0A1F3D",
+    "text_color": "#FFFFFF",
+    "style_suffix": "clean modern flat illustration, aviation theme, bright, minimal, high contrast, no text, no letters, no words",
+    "logo_path": "assets/logo.png",
+    "slide_size": [1080, 1350]
+  }
+}

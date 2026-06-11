@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+venv/
+
+# Secrets
+.env
+
+# Runtime data & generated artifacts
+data/*.db
+output/
+
+# Downloaded font binaries (fetched via `python run.py setup-assets`)
+assets/fonts/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
