@@ -9,6 +9,10 @@ venv/
 data/*.db
 output/
 
+# Logs (may contain chat ids / API context — never commit)
+*.log
+bot.log
+
 # Downloaded font binaries (fetched via `python run.py setup-assets`)
 assets/fonts/
 
