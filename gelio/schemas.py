@@ -52,6 +52,10 @@ class PostState(str, Enum):
     FAILED_GENERATION = "FAILED_GENERATION"
     FAILED_VALIDATION = "FAILED_VALIDATION"
     FAILED_POST = "FAILED_POST"
+    # Phase 4: per-platform publish failures (the post stays resumable; the
+    # per-platform *_status columns are the source of truth for what succeeded).
+    FAILED_X = "FAILED_X"
+    FAILED_IG = "FAILED_IG"
 
 
 class Brief(BaseModel):
@@ -138,5 +142,15 @@ class PostRecord(BaseModel):
     regeneration_count: int = 0  # chain depth: original=0, each regen +1 (Phase 3)
     parent_id: str | None = None  # the rejected predecessor a regen was spawned from
     scheduled_time: str | None = None  # ISO timestamp for when to post (Phase 4)
+    # Phase 4: per-platform publish tracking. ``*_status`` is None (not
+    # attempted), "posted", or "failed"; LinkedIn additionally uses "sent"
+    # (PDF delivered to admins, awaiting the Mark-posted tap). The ``*_post_id``
+    # columns record the platform-side ids (tweet id, IG media id) for audit.
+    x_status: str | None = None
+    x_post_id: str | None = None
+    ig_status: str | None = None
+    ig_media_id: str | None = None
+    linkedin_status: str | None = None
+    handled_by: str | None = None  # admin chat id that approved/rejected (Phase 4)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

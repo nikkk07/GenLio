@@ -22,6 +22,7 @@ from gelio.compositor import CompositorError
 from gelio.content_writer import ContentWriterError
 from gelio.llm import LLMError
 from gelio.pipeline import RenderResult, RunResult, build_pipeline, build_renderer
+from gelio.publisher import PublishError
 from gelio.schemas import PostState
 from gelio.store import Store
 from gelio.sync import build_sync
@@ -106,34 +107,78 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     store = Store(settings.db_path)
     try:
         from datetime import datetime, timezone
-        
-        # Parse scheduled time
+
+        from gelio.timeutil import ScheduleParseError, parse_schedule_input, utc_to_ist
+
+        # Naive input is interpreted as IST; explicit Z/offset is respected.
         try:
-            scheduled_dt = datetime.fromisoformat(args.time.replace('Z', '+00:00'))
-            if scheduled_dt.tzinfo is None:
-                # Assume UTC if no timezone provided
-                scheduled_dt = scheduled_dt.replace(tzinfo=timezone.utc)
-            scheduled_time = scheduled_dt.isoformat()
-        except ValueError as e:
-            print(f"ERROR: Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS or YYYY-MM-DDTHH:MM:SSZ")
-            print(f"Example: 2026-06-12T10:30:00Z")
+            scheduled_time = parse_schedule_input(args.time)
+        except (ScheduleParseError, ValueError):
+            print('ERROR: Invalid time. Use IST "YYYY-MM-DD HH:MM" or ISO UTC like 2026-06-12T10:30:00Z')
             return 1
-        
-        # Verify post exists and is approved
+
         record = store.get_post(args.id)
         if record is None:
             print(f"ERROR: Post {args.id} not found")
             return 1
-        
+
         if record.state != PostState.APPROVED:
             print(f"ERROR: Post {args.id} is {record.state.value}, must be APPROVED to schedule")
             return 1
-        
-        # Set scheduled time
+
         updated = store.set_scheduled_time(args.id, scheduled_time)
-        print(f"Scheduled {args.id} for {scheduled_time}")
+        ist = utc_to_ist(scheduled_time).strftime("%Y-%m-%d %I:%M %p IST")
+        print(f"Scheduled {args.id} for {scheduled_time} ({ist})")
         print(f"  Concept: {updated.concept}")
         print(f"  Current time: {datetime.now(timezone.utc).isoformat()}")
+        return 0
+    finally:
+        store.close()
+
+
+def _build_publish_service(settings, store):
+    """Publish service with Telegram wired in when configured (LinkedIn +
+    result broadcasts); without a token, LinkedIn reports as disabled."""
+    from gelio.approval import TelegramClient
+    from gelio.publisher import build_publish_service
+
+    telegram = (
+        TelegramClient(settings.telegram_bot_token) if settings.telegram_bot_token else None
+    )
+    return build_publish_service(settings, store, build_sync(settings), telegram=telegram)
+
+
+def cmd_publish(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = Store(settings.db_path)
+    try:
+        service = _build_publish_service(settings, store)
+        platforms = (
+            [p.strip() for p in args.platforms.split(",") if p.strip()]
+            if args.platforms
+            else None
+        )
+        report = service.publish(args.id, platforms=platforms)
+        print(f"Publish {args.id}:")
+        print(f"  {report.summary()}")
+        print(f"  state: {report.final_state.value if report.final_state else '?'}")
+        failed = [r for r in report.results if not r.ok and not r.skipped]
+        return 1 if failed else 0
+    finally:
+        store.close()
+
+
+def cmd_publish_due(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = Store(settings.db_path)
+    try:
+        service = _build_publish_service(settings, store)
+        reports = service.publish_due()
+        if not reports:
+            print("No approved posts due for publishing.")
+            return 0
+        for report in reports:
+            print(f"Published {report.post_id}: {report.summary()}")
         return 0
     finally:
         store.close()
@@ -256,8 +301,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     sched = sub.add_parser("schedule", help="schedule an approved post for a specific time")
     sched.add_argument("id", help="post id, e.g. 2026-06-11-decision-fatigue")
-    sched.add_argument("time", help="ISO timestamp (UTC), e.g. 2026-06-12T10:30:00Z")
+    sched.add_argument(
+        "time",
+        help='IST time "2026-06-13 18:00" (naive = IST) or explicit UTC 2026-06-12T10:30:00Z',
+    )
     sched.set_defaults(func=cmd_schedule)
+
+    pub = sub.add_parser("publish", help="publish one approved post now (Phase 4)")
+    pub.add_argument("id", help="post id, e.g. 2026-06-11-decision-fatigue")
+    pub.add_argument(
+        "--platforms",
+        default=None,
+        help="comma-separated subset: x,instagram,linkedin (default: all enabled)",
+    )
+    pub.set_defaults(func=cmd_publish)
+
+    pdue = sub.add_parser(
+        "publish-due",
+        help="publish APPROVED posts whose schedule is due or unset (cron-safe, idempotent)",
+    )
+    pdue.set_defaults(func=cmd_publish_due)
 
     lsched = sub.add_parser("list-scheduled", help="list posts scheduled for posting")
     lsched.add_argument("--before", help="show posts scheduled before this ISO timestamp", default=None)
@@ -279,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         CompositorError,
         AssetError,
         ApprovalError,
+        PublishError,
         FileNotFoundError,
     ) as exc:
         logger.error("run failed: %s", exc)

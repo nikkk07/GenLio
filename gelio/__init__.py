@@ -16,10 +16,13 @@ def configure_logging(level: int = logging.INFO) -> None:
 
     Idempotent: repeated calls do not stack handlers.
     """
+    from gelio.redact import TokenRedactionFilter
+
     root = logging.getLogger("gelio")
     if root.handlers:
         return
     handler = logging.StreamHandler()
+    handler.addFilter(TokenRedactionFilter())
     handler.setFormatter(
         logging.Formatter(
             '{"ts":"%(asctime)s","level":"%(levelname)s",'

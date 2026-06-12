@@ -82,7 +82,7 @@ case $choice in
     5)
         echo ""
         read -p "Enter IST time (YYYY-MM-DD HH:MM): " ist_time
-        python ist_to_utc.py "$ist_time"
+        python -m gelio.timeutil "$ist_time"
         echo ""
         ;;
     6)

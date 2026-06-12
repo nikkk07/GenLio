@@ -45,8 +45,14 @@ _SCHEDULE_MARKER = "[schedule:{id}]"
 # Callback actions. Encoded as "<code>|<post_id>" — Telegram caps callback_data
 # at 64 bytes, so we use 1-char codes (and ids are length-bounded, see
 # topic_engine) to stay well under the limit even for long typed topics.
-ACTIONS = ("approve", "reject", "regen", "approve_schedule")
-_ACTION_CODE = {"approve": "a", "reject": "r", "regen": "g", "approve_schedule": "s"}
+ACTIONS = ("approve", "reject", "regen", "approve_schedule", "linkedin_done")
+_ACTION_CODE = {
+    "approve": "a",
+    "reject": "r",
+    "regen": "g",
+    "approve_schedule": "s",
+    "linkedin_done": "l",
+}
 _CODE_ACTION = {v: k for k, v in _ACTION_CODE.items()}
 
 
@@ -160,6 +166,7 @@ class TelegramAPI(Protocol):
 
     def send_media_group(self, chat_id: str, photo_paths: list[Path], caption: str | None) -> Any: ...
     def send_message(self, chat_id: str, text: str, reply_markup: dict | None = None) -> dict: ...
+    def send_document(self, chat_id: str, document_path: Path, caption: str | None = None) -> Any: ...
     def edit_message_text(self, chat_id: str, message_id: int, text: str) -> Any: ...
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> Any: ...
     def get_updates(self, offset: int | None, timeout: int) -> list[dict]: ...
@@ -232,6 +239,15 @@ class TelegramClient:
             payload["reply_markup"] = reply_markup
         return self._post("sendMessage", payload)
 
+    def send_document(self, chat_id: str, document_path: Path, caption: str | None = None) -> Any:
+        data: dict[str, Any] = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+        files = {
+            "document": (document_path.name, document_path.read_bytes(), "application/pdf")
+        }
+        return self._post_multipart("sendDocument", data, files)
+
     def edit_message_text(self, chat_id: str, message_id: int, text: str) -> Any:
         return self._post(
             "editMessageText",
@@ -277,15 +293,32 @@ class ApprovalService:
         settings: Settings,
         sync: SupabaseSync,
         regen_runner: RegenRunner,
+        publish_runner: Callable[[str], Any] | None = None,
+        mark_linkedin_runner: Callable[[str], Any] | None = None,
     ) -> None:
         self._tg = telegram
         self._store = store
         self._settings = settings
         self._sync = sync
         self._regen = regen_runner
+        # publish_runner(post_id) publishes an approved, unscheduled post
+        # immediately after the Approve tap (Phase 4); None disables that hook.
+        self._publish = publish_runner
+        # mark_linkedin_runner(post_id) marks LinkedIn posted *and* recomputes
+        # the overall state (COMPLETE when every enabled platform is done).
+        self._mark_linkedin = mark_linkedin_runner
         self._chat_id = settings.telegram_admin_chat_id
-        # Parse multiple admin chat IDs
-        self._admin_chat_ids = [id.strip() for id in str(self._chat_id).split(",")]
+        self._admin_chat_ids = settings.telegram_admin_chat_ids
+
+    def _broadcast(self, text: str, exclude: Any = None) -> None:
+        """Send ``text`` to every admin (optionally skipping the actor)."""
+        for admin in self._admin_chat_ids:
+            if exclude is not None and str(admin) == str(exclude):
+                continue
+            try:
+                self._tg.send_message(admin, text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("broadcast to admin %s failed: %s", admin, exc)
 
     # -- preview -------------------------------------------------------------
     def send_preview(self, post_id: str) -> None:
@@ -356,31 +389,79 @@ class ApprovalService:
             self._tg.answer_callback_query(cq_id, "Unknown or expired post.")
             return
 
-        # Idempotency: only an AWAITING_APPROVAL post is actionable.
+        # LinkedIn Mark-posted lives outside the approval gate (the post is
+        # already deep into publishing when this button exists).
+        if action == "linkedin_done":
+            self._handle_linkedin_done(cq_id, chat_id, message_id, record)
+            return
+
+        # Idempotency across admins: only an AWAITING_APPROVAL post is
+        # actionable; the first tap wins and later taps learn who acted.
         if record.state != PostState.AWAITING_APPROVAL:
-            self._tg.answer_callback_query(cq_id, "Already handled.")
+            handler = record.handled_by or "another admin"
+            self._tg.answer_callback_query(cq_id, f"Already handled by {handler}.")
             return
 
         now = datetime.now().strftime("%H:%M")
         if action == "approve":
             # Answer first (it expires fast), then do the durable work + edit.
             self._tg.answer_callback_query(cq_id, "Approved ✅")
+            self._store.set_handled_by(post_id, str(chat_id))
             updated = self._safe_transition(post_id, PostState.APPROVED)
             self._tg.edit_message_text(
                 chat_id,
                 message_id,
-                f"✅ Approved at {now}\n\nReady for immediate posting (no schedule set).",
+                f"✅ Approved at {now}\n\nNo schedule set — publishing now.",
             )
             self._sync.push_state(updated)
+            self._broadcast(f"✅ {post_id} approved by {chat_id}", exclude=chat_id)
+            self._publish_now(post_id)
         elif action == "approve_schedule":
             self._prompt_schedule(cq_id, chat_id, post_id)
         elif action == "reject":
             self._tg.answer_callback_query(cq_id, "Rejected")
+            self._store.set_handled_by(post_id, str(chat_id))
             updated = self._safe_transition(post_id, PostState.REJECTED)
             self._tg.edit_message_text(chat_id, message_id, f"❌ Rejected at {now}")
             self._sync.push_state(updated)
+            self._broadcast(f"❌ {post_id} rejected by {chat_id}", exclude=chat_id)
         elif action == "regen":
             self._prompt_regen(cq_id, chat_id, record.date, post_id)
+
+    def _publish_now(self, post_id: str) -> None:
+        """Publish immediately after an unscheduled Approve (Phase 4 hook)."""
+        if self._publish is None:
+            return
+        record = self._store.get_post(post_id)
+        if record is None or record.scheduled_time is not None:
+            return
+        try:
+            self._publish(post_id)  # the publish service reports results to all admins
+        except Exception as exc:  # noqa: BLE001 - publishing must not kill the bot loop
+            logger.error("immediate publish failed id=%s: %s", post_id, exc)
+            self._broadcast(f"⚠️ Publishing {post_id} failed: {exc}\nRetry with: publish {post_id}")
+
+    def _handle_linkedin_done(
+        self, cq_id: Any, chat_id: Any, message_id: Any, record
+    ) -> None:
+        """Mark LinkedIn manually posted — idempotent across admins."""
+        if record.linkedin_status == "posted":
+            self._tg.answer_callback_query(cq_id, "Already marked posted.")
+            return
+        self._tg.answer_callback_query(cq_id, "LinkedIn marked posted ✅")
+        if self._mark_linkedin is not None:
+            updated = self._mark_linkedin(record.id)
+        else:
+            self._store.set_platform_result(record.id, "linkedin", "posted")
+            updated = self._store.get_post(record.id)
+            self._sync.push_state(updated)
+        self._tg.edit_message_text(
+            chat_id, message_id, f"💼 LinkedIn marked posted for {record.id} ✅"
+        )
+        note = f"💼 {record.id}: LinkedIn marked posted by {chat_id}"
+        if updated is not None and updated.state is PostState.COMPLETE:
+            note += "\n🏁 All enabled platforms done — post COMPLETE."
+        self._broadcast(note, exclude=chat_id)
 
     def _prompt_regen(self, cq_id: Any, chat_id: Any, date: str, post_id: str) -> None:
         used = self._store.count_regenerations(date)
@@ -400,20 +481,53 @@ class ApprovalService:
         )
 
     def _prompt_schedule(self, cq_id: Any, chat_id: Any, post_id: str) -> None:
-        """Prompt admin to send a scheduled time."""
+        """Prompt admin to send a scheduled time (IST by default)."""
         self._tg.answer_callback_query(cq_id, "Send posting time…")
         prompt = (
-            "⏰ Send the posting time in ISO format (UTC):\n"
-            "Examples:\n"
-            "  2026-06-12T10:30:00Z\n"
-            "  2026-06-15T08:00:00Z\n\n"
+            "⏰ Send the posting time in IST:\n"
+            "  2026-06-13 18:00\n"
+            "(or explicit UTC: 2026-06-13T12:30:00Z)\n\n"
             f"{schedule_marker(post_id)}"
         )
         self._tg.send_message(
             chat_id,
             prompt,
-            reply_markup={"force_reply": True, "input_field_placeholder": "YYYY-MM-DDTHH:MM:SSZ"},
+            reply_markup={"force_reply": True, "input_field_placeholder": "YYYY-MM-DD HH:MM (IST)"},
         )
+
+    def _handle_schedule_reply(self, chat_id: Any, post_id: str, text: str) -> None:
+        """Store the typed schedule time (IST → UTC) and approve the post."""
+        from gelio.timeutil import ScheduleParseError, parse_schedule_input, utc_to_ist
+
+        record = self._store.get_post(post_id)
+        if record is None:
+            self._tg.send_message(chat_id, "That post no longer exists.")
+            return
+        if record.state != PostState.AWAITING_APPROVAL:
+            handler = record.handled_by or "another admin"
+            self._tg.send_message(chat_id, f"Already handled by {handler}.")
+            return
+        try:
+            scheduled_utc = parse_schedule_input(text)
+        except (ScheduleParseError, ValueError) as exc:
+            self._tg.send_message(
+                chat_id,
+                f"❌ Couldn't parse that time: {exc}\n"
+                "Send IST like `2026-06-13 18:00`, or tap ⏰ Schedule again.",
+            )
+            return
+        self._store.set_scheduled_time(post_id, scheduled_utc)
+        self._store.set_handled_by(post_id, str(chat_id))
+        updated = self._safe_transition(post_id, PostState.APPROVED)
+        self._sync.push_state(updated)
+        ist = utc_to_ist(scheduled_utc).strftime("%Y-%m-%d %I:%M %p IST")
+        self._tg.send_message(
+            chat_id, f"✅ Approved and scheduled {post_id} for {ist} ({scheduled_utc} UTC)."
+        )
+        self._broadcast(
+            f"⏰ {post_id} approved & scheduled for {ist} by {chat_id}", exclude=chat_id
+        )
+        logger.info("scheduled id=%s utc=%s by admin=%s", post_id, scheduled_utc, chat_id)
 
     def _handle_start_command(self, chat_id: Any) -> None:
         """Handle /start command - generate new post and send for approval to ALL admins."""
@@ -505,6 +619,13 @@ class ApprovalService:
         reply_to = message.get("reply_to_message")
         if not reply_to:
             return  # not a ForceReply answer we care about
+
+        # Schedule reply: "[schedule:<id>]" prompt answered with an IST time.
+        schedule_id = parse_schedule_marker(reply_to.get("text", ""))
+        if schedule_id is not None:
+            self._handle_schedule_reply(chat_id, schedule_id, text)
+            return
+
         parent_id = parse_regen_marker(reply_to.get("text", ""))
         if parent_id is None:
             return
@@ -596,10 +717,12 @@ class ApprovalService:
 
 
 def build_approval(settings: Settings, store: Store, sync: SupabaseSync) -> ApprovalService:
-    """Construct an ApprovalService with a lazily-built regeneration runner.
+    """Construct an ApprovalService with lazily-built regen + publish runners.
 
     The regen runner builds a full pipeline (LLM + render) only when a
     regeneration actually happens, so ``send-approval`` works without LLM keys.
+    The publish runners share this Telegram client, so LinkedIn delivery and
+    result broadcasts reach the same admin chats.
     """
     telegram = TelegramClient(settings.telegram_bot_token)
 
@@ -621,4 +744,18 @@ def build_approval(settings: Settings, store: Store, sync: SupabaseSync) -> Appr
         finally:
             pstore.close()
 
-    return ApprovalService(telegram, store, settings, sync, _regen)
+    def _publish_service():
+        from gelio.publisher import build_publish_service  # local import avoids a cycle
+
+        return build_publish_service(settings, store, sync, telegram=telegram)
+
+    def _publish(post_id: str):
+        return _publish_service().publish(post_id)
+
+    def _mark_linkedin(post_id: str):
+        return _publish_service().mark_linkedin_posted(post_id)
+
+    return ApprovalService(
+        telegram, store, settings, sync, _regen,
+        publish_runner=_publish, mark_linkedin_runner=_mark_linkedin,
+    )

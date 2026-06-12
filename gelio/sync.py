@@ -52,6 +52,12 @@ def build_post_payload(
         "status": record.state.value,
         "regeneration_count": record.regeneration_count,
         "parent_id": record.parent_id,
+        # Phase 4: schedule + per-platform audit trail (run the matching
+        # ALTER TABLE block in supabase/schema.sql once to add the columns).
+        "scheduled_time": record.scheduled_time,
+        "x_post_id": record.x_post_id,
+        "ig_media_id": record.ig_media_id,
+        "handled_by": record.handled_by,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }

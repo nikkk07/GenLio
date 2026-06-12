@@ -17,21 +17,33 @@ from gelio.schemas import PostRecord, PostState
 
 logger = logging.getLogger("gelio.store")
 
+# Phase 4: once a post is APPROVED, publishing may touch platforms in any
+# order, fail per-platform, and resume — so the publish-era states form a
+# fully connected sub-graph (each may move to any other, or to COMPLETE).
+# The per-platform *_status columns prevent double-posting; the single state
+# column is a coarse milestone for the dashboard.
+_PUBLISH_STATES: set[PostState] = {
+    PostState.APPROVED,
+    PostState.POSTED_X,
+    PostState.POSTED_IG,
+    PostState.LINKEDIN_PENDING,
+    PostState.FAILED_POST,
+    PostState.FAILED_X,
+    PostState.FAILED_IG,
+}
+
 # Allowed transitions. Phase 1 only exercises (none) -> DRAFTED, but the full
 # graph is encoded now so downstream phases simply call transition().
 _ALLOWED: dict[PostState, set[PostState]] = {
     PostState.DRAFTED: {PostState.AWAITING_APPROVAL, PostState.REJECTED, PostState.FAILED_VALIDATION},
     PostState.AWAITING_APPROVAL: {PostState.APPROVED, PostState.REJECTED},
-    PostState.APPROVED: {PostState.POSTED_X, PostState.POSTED_IG, PostState.LINKEDIN_PENDING, PostState.FAILED_POST},
-    PostState.POSTED_X: {PostState.POSTED_IG, PostState.LINKEDIN_PENDING, PostState.COMPLETE, PostState.FAILED_POST},
-    PostState.POSTED_IG: {PostState.POSTED_X, PostState.LINKEDIN_PENDING, PostState.COMPLETE, PostState.FAILED_POST},
-    PostState.LINKEDIN_PENDING: {PostState.COMPLETE, PostState.FAILED_POST},
     PostState.COMPLETE: set(),
     PostState.REJECTED: set(),
     PostState.FAILED_GENERATION: {PostState.DRAFTED},
     PostState.FAILED_VALIDATION: {PostState.DRAFTED},
-    PostState.FAILED_POST: {PostState.APPROVED},
 }
+for _state in _PUBLISH_STATES:
+    _ALLOWED[_state] = (_PUBLISH_STATES - {_state}) | {PostState.COMPLETE}
 
 
 class StateTransitionError(RuntimeError):
@@ -103,6 +115,12 @@ class Store:
         if "scheduled_time" not in cols:
             logger.info("migrating posts: adding scheduled_time column")
             self._conn.execute("ALTER TABLE posts ADD COLUMN scheduled_time TEXT;")
+        # Phase 4: per-platform publish tracking + the admin who acted.
+        for col in ("x_status", "x_post_id", "ig_status", "ig_media_id",
+                    "linkedin_status", "handled_by"):
+            if col not in cols:
+                logger.info("migrating posts: adding %s column", col)
+                self._conn.execute(f"ALTER TABLE posts ADD COLUMN {col} TEXT;")
 
     def close(self) -> None:
         self._conn.close()
@@ -239,16 +257,64 @@ class Store:
         logger.info("set scheduled_time id=%s time=%s", post_id, scheduled_time)
         return self.get_post(post_id)  # type: ignore[return-value]
 
-    def get_posts_due_for_posting(self, before_time: str | None = None) -> list[PostRecord]:
-        """Get all APPROVED posts with scheduled_time <= before_time (or now if None)."""
+    def get_posts_due_for_posting(
+        self, before_time: str | None = None, *, include_unscheduled: bool = False
+    ) -> list[PostRecord]:
+        """APPROVED posts whose scheduled_time has passed (and, for the
+        ``publish-due`` cron path, unscheduled APPROVED posts too)."""
         if before_time is None:
             before_time = _now()
+        unscheduled = "OR scheduled_time IS NULL" if include_unscheduled else ""
         rows = self._conn.execute(
-            """
+            f"""
             SELECT * FROM posts
-            WHERE state = ? AND scheduled_time IS NOT NULL AND scheduled_time <= ?
+            WHERE state = ?
+              AND ((scheduled_time IS NOT NULL AND scheduled_time <= ?) {unscheduled})
             ORDER BY scheduled_time
             """,
             (PostState.APPROVED.value, before_time),
         ).fetchall()
         return [PostRecord(**dict(r)) for r in rows]
+
+    # -- Phase 4: per-platform publish tracking --------------------------------
+    def set_platform_result(
+        self, post_id: str, platform: str, status: str, ref_id: str | None = None
+    ) -> PostRecord:
+        """Record a platform attempt outcome (and its platform-side id).
+
+        ``platform`` is ``"x"``, ``"ig"``, or ``"linkedin"``; ``status`` is
+        ``"posted"`` / ``"failed"`` (LinkedIn also uses ``"sent"``).
+        """
+        columns = {
+            "x": ("x_status", "x_post_id"),
+            "ig": ("ig_status", "ig_media_id"),
+            "linkedin": ("linkedin_status", None),
+        }
+        if platform not in columns:
+            raise ValueError(f"unknown platform {platform!r}")
+        status_col, id_col = columns[platform]
+        ts = _now()
+        if id_col is not None and ref_id is not None:
+            self._conn.execute(
+                f"UPDATE posts SET {status_col} = ?, {id_col} = ?, updated_at = ? WHERE id = ?",
+                (status, ref_id, ts, post_id),
+            )
+        else:
+            self._conn.execute(
+                f"UPDATE posts SET {status_col} = ?, updated_at = ? WHERE id = ?",
+                (status, ts, post_id),
+            )
+        self._conn.commit()
+        logger.info("platform result id=%s %s=%s ref=%s", post_id, platform, status, ref_id)
+        record = self.get_post(post_id)
+        if record is None:
+            raise StateTransitionError(f"unknown post id {post_id!r}")
+        return record
+
+    def set_handled_by(self, post_id: str, admin_chat_id: str) -> None:
+        """Record which admin's tap decided this post (first tap wins)."""
+        self._conn.execute(
+            "UPDATE posts SET handled_by = ?, updated_at = ? WHERE id = ?",
+            (str(admin_chat_id), _now(), post_id),
+        )
+        self._conn.commit()

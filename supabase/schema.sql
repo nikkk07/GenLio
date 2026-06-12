@@ -22,6 +22,12 @@ create table if not exists public.posts (
     updated_at         text
 );
 
+-- Phase 4 additions (safe to re-run on an existing project).
+alter table public.posts add column if not exists scheduled_time text;
+alter table public.posts add column if not exists x_post_id      text;
+alter table public.posts add column if not exists ig_media_id    text;
+alter table public.posts add column if not exists handled_by     text;
+
 create index if not exists idx_posts_date   on public.posts (date);
 create index if not exists idx_posts_status on public.posts (status);
 

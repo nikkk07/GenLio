@@ -1,14 +1,16 @@
-# gelio — Content Intelligence Core (Phase 1)
+# gelio — AI content agent (Phases 1–4)
 
 `gelio` is a production-grade, **free-tier-only** AI content agent for the
 aviation training academy **We One Aviation**. Each run maps a psychology
 principle (Decision Fatigue, Impostor Syndrome, Spotlight Effect, …) onto
 aviation / DGCA / pilot-training life, writes a full 8–10 slide carousel script
 plus per-platform captions, and saves everything as **schema-validated JSON
-artifacts** that later phases consume unchanged.
+artifacts**.
 
-Phase 1 produces clean, schema-locked outputs and reaches the `DRAFTED` state.
-Image generation, Telegram approval, and auto-posting come in later phases.
+The full pipeline: content (Phase 1) → branded slide visuals + PDF (Phase 2)
+→ Telegram approval with multi-admin buttons and IST scheduling (Phase 3) →
+publishing to X and Instagram automatically, plus a semi-manual LinkedIn PDF
+hand-off (Phase 4).
 
 ---
 
@@ -54,10 +56,20 @@ cp .env.example .env
 | `TOGETHER_IMAGE_MODEL` | no  | `black-forest-labs/FLUX.1-schnell-Free` | Override Together model.       |
 | `POLLINATIONS_TOKEN` | no    | —                          | Legacy (Phase 2); no longer in the image chain.  |
 | `TELEGRAM_BOT_TOKEN` | for approval | —                  | BotFather token (Phase 3).                       |
-| `TELEGRAM_ADMIN_CHAT_ID` | for approval | —              | Only this chat may drive the bot (Phase 3).      |
-| `SUPABASE_URL`    | no       | —                          | Set to enable dashboard sync; blank = disabled.  |
+| `TELEGRAM_ADMIN_CHAT_ID` | for approval | —              | Admin chat id(s); comma-separate for multiple admins, e.g. `111,222`. |
+| `SUPABASE_URL`    | no\*\*   | —                          | Bare project URL (`https://<ref>.supabase.co`, no `/rest/v1`); blank = sync disabled. |
 | `SUPABASE_SERVICE_KEY` | no  | —                          | service_role key (server-side only).             |
 | `SUPABASE_BUCKET` | no       | `slides`                   | Public storage bucket for slides + PDF.          |
+| `X_CONSUMER_KEY` / `X_CONSUMER_SECRET` | for X | —        | X app keys (Read+Write app, OAuth 1.0a). All 4 X keys required or X is skipped. |
+| `X_ACCESS_TOKEN` / `X_ACCESS_TOKEN_SECRET` | for X | —    | User-context access token + secret.              |
+| `X_MAX_IMAGES`    | no       | `4`                        | Slides per tweet (X hard cap is 4; first N slides are posted). |
+| `IG_USER_ID`      | for IG   | —                          | IG Business/Creator user id (linked to a FB Page). |
+| `IG_ACCESS_TOKEN` | for IG   | —                          | Long-lived Graph API token. Missing keys → IG skipped. |
+
+\*\* **Instagram requires Supabase**: the Graph API fetches slides from public
+URLs, which sync uploads to the public bucket. Without `SUPABASE_URL`, the IG
+publisher skips gracefully ("Instagram requires Supabase slide URLs — enable
+sync") and the rest of the publish run completes.
 
 \* You need at least one working LLM key. Groq is primary; Gemini is the
 automatic fallback. Providers with a missing key are skipped.
@@ -109,13 +121,63 @@ python run.py send-approval 2026-06-11-decision-fatigue
 python run.py bot
 ```
 
-Flow: the admin gets the slides as a Telegram album, the three captions +
-hashtags, and inline buttons. **✅ Approve** → `APPROVED`, **❌ Reject** →
-`REJECTED`, **🔄 Regenerate** → the bot asks (via ForceReply) for a topic (or
-`auto`); it rejects the current post and renders a fresh one on that topic,
-linked by `parent_id`. The bot only obeys `TELEGRAM_ADMIN_CHAT_ID`, button taps
-are idempotent (double-tap → "already handled"), and regenerations are capped at
-3/day. Nothing publishes without an explicit Approve.
+Flow: every admin in `TELEGRAM_ADMIN_CHAT_ID` (comma-separated for multiple)
+gets the slides as a Telegram album, the three captions + hashtags, and inline
+buttons. **✅ Approve Now** → `APPROVED` and (Phase 4) publishes immediately,
+**⏰ Schedule** → the bot asks (via ForceReply) for a time in **IST** (e.g.
+`2026-06-13 18:00`; explicit `…Z`/offset also accepted), stores it as UTC, and
+approves — `publish-due` posts it when the time comes. **❌ Reject** →
+`REJECTED`, **🔄 Regenerate** → the bot asks for a topic (or `auto`); it
+rejects the current post and renders a fresh one on that topic, linked by
+`parent_id`. Buttons are idempotent **across admins**: the first tap wins and
+later taps answer "Already handled by <admin>". Action results are broadcast
+to all admins. Regenerations are capped at 3/day. Nothing publishes without an
+explicit Approve.
+
+### Phase 4 — publishers (X, Instagram, LinkedIn)
+
+```bash
+# Publish one APPROVED post right now (all enabled platforms).
+python run.py publish 2026-06-11-decision-fatigue
+
+# Only specific platforms (also how you retry a failed platform).
+python run.py publish 2026-06-11-decision-fatigue --platforms x,instagram
+
+# Cron entry point: publish APPROVED posts whose schedule is due or unset.
+# Idempotent — safe to run every few minutes.
+python run.py publish-due
+
+# Schedule from the CLI (naive time = IST, converted to UTC for storage).
+python run.py schedule 2026-06-11-decision-fatigue "2026-06-13 18:00"
+python -m gelio.timeutil "2026-06-13 18:00"   # standalone IST→UTC converter
+```
+
+Per-platform behavior:
+
+- **X (Twitter)** — OAuth 1.0a user-context (hand-rolled HMAC-SHA1, no extra
+  deps). Each slide is uploaded via the v1.1 media endpoint, then one tweet is
+  created via `POST /2/tweets`. **X allows max 4 images per tweet**, so the
+  first `X_MAX_IMAGES` (default 4: hook + 3 insights) slides are posted with
+  the X caption; hashtags are appended only while the text stays ≤ 280 chars.
+- **Instagram** — Graph API carousel: one item container per slide
+  (`is_carousel_item`), a `CAROUSEL` container with the IG caption + hashtags,
+  status polled until `FINISHED`, then `media_publish`. Requires IG
+  Business/Creator + `IG_USER_ID`/`IG_ACCESS_TOKEN` **and Supabase sync** (the
+  API fetches slides from the public bucket URLs).
+- **LinkedIn (semi-manual by design)** — every admin receives `carousel.pdf`
+  as a Telegram document plus the ready-to-paste LinkedIn caption + hashtags
+  and a **"✅ Mark LinkedIn posted"** button. Upload the PDF manually, then tap
+  the button (idempotent across admins) to confirm.
+
+**Completion semantics:** per-platform results are tracked in dedicated
+columns (`x_status`/`x_post_id`, `ig_status`/`ig_media_id`,
+`linkedin_status`). When every **enabled** platform has succeeded (disabled
+platforms — missing keys — are excluded), the post transitions to `COMPLETE`
+and syncs. A platform failure marks `FAILED_X` / `FAILED_IG` (or
+`FAILED_POST`) but the post stays resumable: `publish <id>` retries **only**
+the failed/unfinished platforms and never re-posts to one already marked
+posted. Transient errors (429/5xx/network) are retried with backoff;
+permanent 4xx fail fast with the (token-redacted) response body logged.
 
 Each non-dry run writes:
 
@@ -160,10 +222,19 @@ existing record and reports its location instead of writing duplicates.
    `TELEGRAM_BOT_TOKEN`.
 2. Get your numeric chat id: message **@userinfobot**, or message your new bot
    then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and read
-   `message.chat.id`. Put it in `TELEGRAM_ADMIN_CHAT_ID` (the bot ignores every
-   other sender).
+   `message.chat.id`. Put it in `TELEGRAM_ADMIN_CHAT_ID` — comma-separate for
+   multiple admins (the bot ignores every other sender; every listed admin
+   receives previews and may tap buttons).
 3. Run `python run.py bot` to handle button taps, and
    `python run.py generate --render --approve` to push a post for review.
+
+**Security notes**
+- Never commit logs: `bot.log` is git-ignored. Log output passes through a
+  redaction filter (`gelio/redact.py`) so a Telegram URL or exception can
+  never leak the bot token into a log line.
+- If the token was ever exposed (e.g. a log committed to a public repo),
+  revoke it via **@BotFather → /revoke** and paste the new token into `.env` —
+  no code change needed; the token is only read from the environment.
 
 ### Supabase (optional dashboard sync)
 1. Create a free project; copy the **Project URL** → `SUPABASE_URL` and the
@@ -204,7 +275,11 @@ gelio/compositor.py     HTML/CSS templates -> Playwright screenshot (3.5)
 gelio/templates/        Jinja2 base + hook/insight/cta + styles.css (3.5)
 gelio/pdf_builder.py    composited slides -> carousel.pdf (Phase 2)
 gelio/assets.py         download brand fonts (setup-assets)
-gelio/approval.py       Telegram approval gate: preview, buttons, regen (Phase 3)
+gelio/approval.py       Telegram approval gate: preview, buttons, regen,
+                        scheduling, LinkedIn confirm (Phases 3–4)
+gelio/publisher.py      X / Instagram / LinkedIn publishers + PublishService (4)
+gelio/timeutil.py       IST ⇄ UTC schedule parsing (+ python -m gelio.timeutil)
+gelio/redact.py         token redaction helper + logging filter
 gelio/sync.py           best-effort Supabase sync for the dashboard (Phase 3)
 gelio/pipeline.py       one end-to-end run (idempotent, dry-run + render aware)
 run.py                  CLI
@@ -293,29 +368,34 @@ last, caption limits, and 5–10 hashtags.
 ```
 DRAFTED → AWAITING_APPROVAL → APPROVED
         → POSTED_X / POSTED_IG / LINKEDIN_PENDING → COMPLETE
-plus REJECTED and FAILED_* states.
+plus REJECTED and FAILED_* (incl. FAILED_X / FAILED_IG, both resumable).
 ```
-Phase 1 only reaches `DRAFTED`; the full table and transitions exist now so
-later phases never migrate the schema.
+Once `APPROVED`, the publish-era states form a fully connected sub-graph
+(platforms may succeed/fail in any order and be retried); the per-platform
+`*_status` columns are the source of truth for what actually posted, and the
+single `state` column is the coarse milestone shown on the dashboard.
 
 ---
 
-## Phase 4 hand-off (publisher)
+## Phase 4 publishing lifecycle
 
-Phase 3 hands the publisher a clean queue: a post in state **`APPROVED`** is
-cleared to go live. Everything needed is on disk + DB, keyed by `<id>`:
+A post in state **`APPROVED`** is cleared to go live. Publishing triggers:
 
-- **`output/<id>/slides/slide_1.png … slide_N.png`** — final 1080×1350 slides.
-- **`output/<id>/carousel.pdf`** — the LinkedIn-ready carousel.
-- **`output/<id>/content.json`** — `captions` (linkedin / instagram / x) and
-  `hashtags` to attach when posting.
-- SQLite `posts.<id>` is `APPROVED` (with `rendered_at`, and `parent_id` /
-  `regeneration_count` if it came from a regenerate).
-- If Supabase is configured, the same row + public asset URLs are mirrored to
-  `public.posts` for the dashboard.
+- **immediately on ✅ Approve Now** (no schedule set) — the bot publishes and
+  reports per-platform results back into the Telegram thread for all admins
+  ("🐦 X ✅ · 📸 Instagram ✅ · 💼 LinkedIn PDF sent — upload manually"); or
+- **at `scheduled_time`** (set via the ⏰ Schedule button or `run.py
+  schedule`) — run `python run.py publish-due` from cron to pick these up
+  (it also catches unscheduled APPROVED posts the bot missed).
 
-Phase 4 should poll for `APPROVED` posts, publish per platform, and advance the
-existing state machine: `APPROVED → POSTED_X / POSTED_IG / LINKEDIN_PENDING →
-COMPLETE` (or `FAILED_POST`) via `Store.transition(...)`, calling
-`SupabaseSync.push_state(...)` after each change. The `PostState` machine and all
-columns already exist, so **no schema migration is required**.
+Each platform success advances the state (`POSTED_X`, `POSTED_IG`,
+`LINKEDIN_PENDING`) and records the platform post id (`x_post_id`,
+`ig_media_id`) for audit; `SupabaseSync.push_state(...)` runs after every
+change. When all enabled platforms are done the post reaches **`COMPLETE`**.
+If you add IG keys later, nothing else changes — the next `publish <id>`
+simply stops skipping Instagram.
+
+> **Supabase note:** re-run `supabase/schema.sql` once after upgrading to
+> Phase 4 — it adds the `scheduled_time` / `x_post_id` / `ig_media_id` /
+> `handled_by` columns (the `alter table … if not exists` block is safe on
+> existing projects).

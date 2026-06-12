@@ -34,6 +34,8 @@ class FakeTelegram:
     def __init__(self) -> None:
         self.media_groups: list[tuple[list[Path], str | None]] = []
         self.messages: list[tuple[str, dict | None, int]] = []
+        self.message_chats: list[tuple[str, str]] = []  # (chat_id, text)
+        self.documents: list[tuple[str, Path, str | None]] = []
         self.edits: list[tuple[int, str]] = []
         self.answers: list[tuple[str, str | None]] = []
         self._mid = 100
@@ -49,7 +51,12 @@ class FakeTelegram:
     def send_message(self, chat_id, text, reply_markup=None):
         mid = self._next()
         self.messages.append((text, reply_markup, mid))
+        self.message_chats.append((str(chat_id), text))
         return {"message_id": mid}
+
+    def send_document(self, chat_id, document_path, caption=None):
+        self.documents.append((str(chat_id), document_path, caption))
+        return {"message_id": self._next()}
 
     def edit_message_text(self, chat_id, message_id, text):
         self.edits.append((message_id, text))
@@ -61,7 +68,7 @@ class FakeTelegram:
         return []
 
 
-def _settings(tmp_path: Path) -> Settings:
+def _settings(tmp_path: Path, admin: str = ADMIN) -> Settings:
     return Settings(
         provider="groq",
         groq_api_key="",
@@ -70,7 +77,7 @@ def _settings(tmp_path: Path) -> Settings:
         gemini_model="m",
         brand=BRAND,
         telegram_bot_token="t",
-        telegram_admin_chat_id=ADMIN,
+        telegram_admin_chat_id=admin,
         max_regenerations_per_day=3,
         output_dir=tmp_path / "output",
         db_path=tmp_path / "db.sqlite",
@@ -243,7 +250,7 @@ def test_double_tap_approve_is_noop(env):
 
     assert store.get_post("2026-06-11-alpha").state is PostState.APPROVED
     assert len(tg.edits) == edits_after_first  # no second edit
-    assert tg.answers[-1][1] == "Already handled."
+    assert tg.answers[-1][1] == f"Already handled by {ADMIN}."
 
 
 def test_non_admin_callback_ignored(env):
@@ -321,3 +328,157 @@ def test_caption_builder_contains_all_platforms(env):
     text = build_caption_text("Decision Fatigue", "the hook", content)
     assert "Decision Fatigue" in text and "the hook" in text
     assert "LinkedIn" in text and "Instagram" in text and "X" in text
+
+
+# --------------------------------------------------------------------------- #
+# Multi-admin (comma-separated TELEGRAM_ADMIN_CHAT_ID)
+# --------------------------------------------------------------------------- #
+ADMIN2 = "888"
+
+
+@pytest.fixture
+def multi_env(tmp_path):
+    settings = _settings(tmp_path, admin=f"{ADMIN}, {ADMIN2}")
+    store = Store(settings.db_path)
+    tg = FakeTelegram()
+    sync = SupabaseSync(settings)  # disabled (no url)
+    regen = RegenStub(store, settings)
+    published: list[str] = []
+    svc = ApprovalService(
+        tg, store, settings, sync, regen, publish_runner=published.append
+    )
+    yield settings, store, tg, svc, published
+    store.close()
+
+
+def test_preview_broadcast_to_all_admins(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.DRAFTED)
+    svc.send_preview("2026-06-11-alpha")
+
+    assert len(tg.media_groups) == 2  # one album per admin
+    button_chats = [c for c, t in tg.message_chats if "Choose an action" in t]
+    assert sorted(button_chats) == sorted([ADMIN, ADMIN2])
+
+
+def test_every_admin_is_authorized_for_buttons(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_cb("approve", "2026-06-11-alpha", chat_id=ADMIN2))
+    assert store.get_post("2026-06-11-alpha").state is PostState.APPROVED
+    assert store.get_post("2026-06-11-alpha").handled_by == ADMIN2
+
+
+def test_first_tap_wins_second_admin_sees_who_handled(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_cb("approve", "2026-06-11-alpha", chat_id=ADMIN))
+    svc.handle_update(_cb("reject", "2026-06-11-alpha", chat_id=ADMIN2, cq_id="cq2"))
+
+    assert store.get_post("2026-06-11-alpha").state is PostState.APPROVED  # not rejected
+    assert tg.answers[-1] == ("cq2", f"Already handled by {ADMIN}.")
+
+
+def test_approve_broadcasts_to_other_admins(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_cb("approve", "2026-06-11-alpha", chat_id=ADMIN))
+    other = [t for c, t in tg.message_chats if c == ADMIN2]
+    assert any("approved by" in t for t in other)
+
+
+# --------------------------------------------------------------------------- #
+# Immediate publish on Approve (Phase 4 hook)
+# --------------------------------------------------------------------------- #
+def test_approve_unscheduled_publishes_immediately(multi_env):
+    settings, store, tg, svc, published = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_cb("approve", "2026-06-11-alpha"))
+    assert published == ["2026-06-11-alpha"]
+
+
+def test_approve_scheduled_does_not_publish_immediately(multi_env):
+    settings, store, tg, svc, published = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    store.set_scheduled_time("2026-06-11-alpha", "2099-01-01T00:00:00+00:00")
+    svc.handle_update(_cb("approve", "2026-06-11-alpha"))
+    assert published == []  # publish-due will pick it up at the scheduled time
+
+
+# --------------------------------------------------------------------------- #
+# Schedule button + typed reply (IST → stored UTC)
+# --------------------------------------------------------------------------- #
+def _schedule_reply(post_id, text, chat_id=ADMIN):
+    from gelio.approval import schedule_marker
+
+    return {
+        "update_id": 3,
+        "message": {
+            "message_id": 70,
+            "chat": {"id": int(chat_id)},
+            "text": text,
+            "reply_to_message": {"text": f"⏰ Send the posting time\n\n{schedule_marker(post_id)}"},
+        },
+    }
+
+
+def test_schedule_button_sends_forcereply_prompt(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_cb("approve_schedule", "2026-06-11-alpha"))
+    from gelio.approval import parse_schedule_marker
+
+    assert any(rm and rm.get("force_reply") for _, rm, _ in tg.messages)
+    assert any(parse_schedule_marker(t) == "2026-06-11-alpha" for t, _, _ in tg.messages)
+    # Not yet approved — the reply carries the decision.
+    assert store.get_post("2026-06-11-alpha").state is PostState.AWAITING_APPROVAL
+
+
+def test_schedule_reply_ist_stores_utc_and_approves(multi_env):
+    settings, store, tg, svc, published = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_schedule_reply("2026-06-11-alpha", "2026-06-13 18:00"))
+
+    record = store.get_post("2026-06-11-alpha")
+    assert record.state is PostState.APPROVED
+    assert record.scheduled_time == "2026-06-13T12:30:00+00:00"  # 18:00 IST
+    assert record.handled_by == ADMIN
+    assert published == []  # scheduled, so no immediate publish
+    # Confirmation reached both admins.
+    chats = {c for c, t in tg.message_chats if "scheduled" in t.lower()}
+    assert chats == {ADMIN, ADMIN2}
+
+
+def test_schedule_reply_explicit_utc_respected(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_schedule_reply("2026-06-11-alpha", "2026-06-13T12:30:00Z"))
+    assert store.get_post("2026-06-11-alpha").scheduled_time == "2026-06-13T12:30:00+00:00"
+
+
+def test_schedule_reply_invalid_time_keeps_post_pending(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    svc.handle_update(_schedule_reply("2026-06-11-alpha", "tomorrow evening"))
+    record = store.get_post("2026-06-11-alpha")
+    assert record.state is PostState.AWAITING_APPROVAL
+    assert record.scheduled_time is None
+    assert any("Couldn't parse" in t for t, _, _ in tg.messages)
+
+
+# --------------------------------------------------------------------------- #
+# LinkedIn Mark-posted button
+# --------------------------------------------------------------------------- #
+def test_linkedin_done_marks_posted_and_is_idempotent_across_admins(multi_env):
+    settings, store, tg, svc, _ = multi_env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.AWAITING_APPROVAL)
+    store.transition("2026-06-11-alpha", PostState.APPROVED)
+    store.set_platform_result("2026-06-11-alpha", "linkedin", "sent")
+    store.transition("2026-06-11-alpha", PostState.LINKEDIN_PENDING)
+
+    svc.handle_update(_cb("linkedin_done", "2026-06-11-alpha", chat_id=ADMIN))
+    assert store.get_post("2026-06-11-alpha").linkedin_status == "posted"
+    assert tg.answers[-1][1] == "LinkedIn marked posted ✅"
+
+    svc.handle_update(_cb("linkedin_done", "2026-06-11-alpha", chat_id=ADMIN2, cq_id="cq9"))
+    assert tg.answers[-1] == ("cq9", "Already marked posted.")
