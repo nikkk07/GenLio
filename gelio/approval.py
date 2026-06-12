@@ -40,12 +40,13 @@ REGEN_PROMPT = (
     "(or send `auto` to let gelio pick)."
 )
 _REGEN_MARKER = "[regen:{id}]"
+_SCHEDULE_MARKER = "[schedule:{id}]"
 
 # Callback actions. Encoded as "<code>|<post_id>" — Telegram caps callback_data
 # at 64 bytes, so we use 1-char codes (and ids are length-bounded, see
 # topic_engine) to stay well under the limit even for long typed topics.
-ACTIONS = ("approve", "reject", "regen")
-_ACTION_CODE = {"approve": "a", "reject": "r", "regen": "g"}
+ACTIONS = ("approve", "reject", "regen", "approve_schedule")
+_ACTION_CODE = {"approve": "a", "reject": "r", "regen": "g", "approve_schedule": "s"}
 _CODE_ACTION = {v: k for k, v in _ACTION_CODE.items()}
 
 
@@ -110,12 +111,30 @@ def action_keyboard(post_id: str) -> dict[str, Any]:
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Approve", "callback_data": encode_callback("approve", post_id)},
+                {"text": "✅ Approve Now", "callback_data": encode_callback("approve", post_id)},
+                {"text": "⏰ Schedule", "callback_data": encode_callback("approve_schedule", post_id)},
+            ],
+            [
                 {"text": "❌ Reject", "callback_data": encode_callback("reject", post_id)},
                 {"text": "🔄 Regenerate", "callback_data": encode_callback("regen", post_id)},
             ]
         ]
     }
+
+
+def schedule_marker(post_id: str) -> str:
+    return _SCHEDULE_MARKER.format(id=post_id)
+
+
+def parse_schedule_marker(text: str) -> str | None:
+    """Extract the post id from a ForceReply prompt's embedded marker."""
+    start = text.find("[schedule:")
+    if start == -1:
+        return None
+    end = text.find("]", start)
+    if end == -1:
+        return None
+    return text[start + len("[schedule:") : end].strip() or None
 
 
 def regen_marker(post_id: str) -> str:
@@ -265,10 +284,12 @@ class ApprovalService:
         self._sync = sync
         self._regen = regen_runner
         self._chat_id = settings.telegram_admin_chat_id
+        # Parse multiple admin chat IDs
+        self._admin_chat_ids = [id.strip() for id in str(self._chat_id).split(",")]
 
     # -- preview -------------------------------------------------------------
     def send_preview(self, post_id: str) -> None:
-        """Send album + captions + action buttons and move to AWAITING_APPROVAL."""
+        """Send album + captions + action buttons to ALL admin chats and move to AWAITING_APPROVAL."""
         record = self._store.get_post(post_id)
         if record is None:
             raise ApprovalError(f"unknown post id {post_id!r}")
@@ -283,24 +304,30 @@ class ApprovalService:
         )
         fits = len(caption_text) <= CAPTION_LIMIT
 
-        for i, group in enumerate(chunk_list(slides, MEDIA_GROUP_MAX)):
-            cap = caption_text if (i == 0 and fits) else None
-            self._tg.send_media_group(self._chat_id, group, cap)
+        # Broadcast to ALL admin chat IDs
+        for admin_chat_id in self._admin_chat_ids:
+            try:
+                for i, group in enumerate(chunk_list(slides, MEDIA_GROUP_MAX)):
+                    cap = caption_text if (i == 0 and fits) else None
+                    self._tg.send_media_group(admin_chat_id, group, cap)
 
-        if not fits:
-            for part in split_text(caption_text, TEXT_LIMIT):
-                self._tg.send_message(self._chat_id, part)
+                if not fits:
+                    for part in split_text(caption_text, TEXT_LIMIT):
+                        self._tg.send_message(admin_chat_id, part)
 
-        self._tg.send_message(
-            self._chat_id,
-            "Choose an action for this post:",
-            reply_markup=action_keyboard(post_id),
-        )
+                self._tg.send_message(
+                    admin_chat_id,
+                    "Choose an action for this post:",
+                    reply_markup=action_keyboard(post_id),
+                )
+                logger.info("preview sent to chat=%s id=%s", admin_chat_id, post_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to send preview to chat=%s: %s", admin_chat_id, exc)
 
         if record.state == PostState.DRAFTED:
             record = self._store.transition(post_id, PostState.AWAITING_APPROVAL)
         self._sync.push_state(record, content)
-        logger.info("preview sent id=%s state=%s", post_id, record.state.value)
+        logger.info("preview broadcast complete id=%s state=%s", post_id, record.state.value)
 
     # -- update dispatch -----------------------------------------------------
     def handle_update(self, update: dict[str, Any]) -> None:
@@ -310,7 +337,8 @@ class ApprovalService:
             self._handle_message(update["message"])
 
     def _is_admin(self, chat_id: Any) -> bool:
-        return str(chat_id) == str(self._chat_id)
+        # Support comma-separated chat IDs in env var
+        return str(chat_id) in self._admin_chat_ids
 
     def _handle_callback(self, cq: dict[str, Any]) -> None:
         message = cq.get("message", {})
@@ -341,9 +369,11 @@ class ApprovalService:
             self._tg.edit_message_text(
                 chat_id,
                 message_id,
-                f"✅ Approved at {now}\n\nPublishing module pending — post is queued.",
+                f"✅ Approved at {now}\n\nReady for immediate posting (no schedule set).",
             )
             self._sync.push_state(updated)
+        elif action == "approve_schedule":
+            self._prompt_schedule(cq_id, chat_id, post_id)
         elif action == "reject":
             self._tg.answer_callback_query(cq_id, "Rejected")
             updated = self._safe_transition(post_id, PostState.REJECTED)
@@ -369,10 +399,107 @@ class ApprovalService:
             reply_markup={"force_reply": True, "input_field_placeholder": "topic or auto"},
         )
 
+    def _prompt_schedule(self, cq_id: Any, chat_id: Any, post_id: str) -> None:
+        """Prompt admin to send a scheduled time."""
+        self._tg.answer_callback_query(cq_id, "Send posting time…")
+        prompt = (
+            "⏰ Send the posting time in ISO format (UTC):\n"
+            "Examples:\n"
+            "  2026-06-12T10:30:00Z\n"
+            "  2026-06-15T08:00:00Z\n\n"
+            f"{schedule_marker(post_id)}"
+        )
+        self._tg.send_message(
+            chat_id,
+            prompt,
+            reply_markup={"force_reply": True, "input_field_placeholder": "YYYY-MM-DDTHH:MM:SSZ"},
+        )
+
+    def _handle_start_command(self, chat_id: Any) -> None:
+        """Handle /start command - generate new post and send for approval to ALL admins."""
+        logger.info("/start command received from chat=%s", chat_id)
+        
+        # Send "generating" message to the user who triggered it
+        self._tg.send_message(
+            chat_id,
+            "🚀 Generating new post...\n\n"
+            "⏳ This will take ~30-60 seconds:\n"
+            "  • Selecting concept\n"
+            "  • Writing content\n"
+            "  • Rendering slides\n"
+            "  • Building PDF\n\n"
+            "Please wait..."
+        )
+        
+        try:
+            # Import pipeline here to avoid circular dependency
+            from gelio.pipeline import build_pipeline
+            
+            pipeline, store = build_pipeline(self._settings)
+            try:
+                # Generate with render enabled
+                result = pipeline.generate(
+                    slides=self._settings.default_slides,
+                    dry_run=False,
+                    render=True,
+                    force=False,
+                )
+                
+                # Send success/info message to ALL admins
+                if result.already_existed:
+                    msg = (
+                        f"ℹ️ Post already exists: {result.brief.id}\n\n"
+                        f"Concept: {result.brief.concept}\n\n"
+                        "Sending existing post for approval..."
+                    )
+                else:
+                    msg = (
+                        f"✅ Post generated by admin {chat_id}!\n\n"
+                        f"📋 ID: {result.brief.id}\n"
+                        f"💡 Concept: {result.brief.concept}\n"
+                        f"🎨 Slides: {len(result.content.slides)}\n\n"
+                        "Sending for approval..."
+                    )
+                
+                # Notify all admins
+                for admin_id in self._admin_chat_ids:
+                    try:
+                        self._tg.send_message(admin_id, msg)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("failed to notify admin %s: %s", admin_id, exc)
+                
+                # Send preview to ALL admins (this already broadcasts)
+                self.send_preview(result.brief.id)
+                
+                logger.info(
+                    "/start generated and broadcast id=%s concept=%s to %d admins",
+                    result.brief.id,
+                    result.brief.concept,
+                    len(self._admin_chat_ids)
+                )
+                
+            finally:
+                store.close()
+                
+        except Exception as exc:  # noqa: BLE001
+            logger.error("/start command failed: %s", exc, exc_info=True)
+            # Send error to the user who triggered it
+            self._tg.send_message(
+                chat_id,
+                f"❌ Generation failed: {exc}\n\n"
+                "Please check the server logs or try again with /start"
+            )
+
     def _handle_message(self, message: dict[str, Any]) -> None:
         chat_id = message.get("chat", {}).get("id")
         if not self._is_admin(chat_id):
             logger.warning("ignoring message from non-admin chat=%s", chat_id)
+            return
+
+        # Handle /start command
+        text = (message.get("text") or "").strip()
+        if text == "/start":
+            self._handle_start_command(chat_id)
             return
 
         reply_to = message.get("reply_to_message")

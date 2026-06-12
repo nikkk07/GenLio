@@ -1,0 +1,173 @@
+================================================================================
+🚀 GenLio - START HERE (India IST)
+================================================================================
+
+📍 Project: /Users/nikhlbisht/Desktop/GenLio
+🇮🇳 Timezone: IST (GMT+5:30)
+🤖 Bot: GenLio_Bot
+
+================================================================================
+⚡ FASTEST WAY TO START
+================================================================================
+
+cd /Users/nikhlbisht/Desktop/GenLio
+./quick_start.sh
+
+(Interactive menu will guide you!)
+
+================================================================================
+🎯 MOST COMMON COMMANDS
+================================================================================
+
+# 1. Start Bot Server (MUST BE RUNNING to receive Telegram button clicks)
+cd /Users/nikhlbisht/Desktop/GenLio
+source .venv/bin/activate
+python run.py bot
+
+# 2. Generate + Send Post to Telegram
+cd /Users/nikhlbisht/Desktop/GenLio
+source .venv/bin/activate
+python run.py generate --render --approve
+
+# 3. Convert IST to UTC (for scheduling)
+cd /Users/nikhlbisht/Desktop/GenLio
+python ist_to_utc.py "2026-06-13 18:00"
+
+# 4. Schedule an Approved Post
+cd /Users/nikhlbisht/Desktop/GenLio
+source .venv/bin/activate
+python run.py schedule POST-ID "2026-06-13T12:30:00Z"
+
+# 5. List Scheduled Posts
+cd /Users/nikhlbisht/Desktop/GenLio
+source .venv/bin/activate
+python run.py list-scheduled
+
+================================================================================
+📱 TELEGRAM WORKFLOW (EASIEST!)
+================================================================================
+
+Step 1: Start bot server
+   python run.py bot
+
+Step 2: Open Telegram → GenLio_Bot → Send: /start
+
+Step 3: Wait 30-60 seconds
+   - Bot generates content
+   - Renders slides + PDF
+   - Sends for approval
+
+Step 4: Review slides + Click buttons:
+   ✅ Approve Now - immediate approval
+   ⏰ Schedule - set posting time (bot asks for UTC time)
+   ❌ Reject - reject post
+   🔄 Regenerate - create new version
+
+Step 5: If clicked Schedule:
+   - Bot asks: "Send the posting time"
+   - Convert IST to UTC: python ist_to_utc.py "2026-06-13 18:00"
+   - Reply with UTC time: 2026-06-13T12:30:00Z
+   - Bot confirms: "✅ Approved and scheduled"
+
+That's it! 🎉
+
+================================================================================
+📱 TELEGRAM WORKFLOW (Command Line Alternative)
+================================================================================
+
+Step 1: Open Terminal → Run bot server
+   python run.py bot
+
+Step 2: Generate and send post
+   python run.py generate --render --approve
+
+Step 3: Open Telegram → Find GenLio_Bot
+   - See slides + captions
+   - Click buttons:
+     ✅ Approve Now - immediate approval
+     ⏰ Schedule - set posting time
+     ❌ Reject - reject post
+     🔄 Regenerate - create new version
+
+Step 4: If clicked Schedule:
+   - Bot asks: "Send the posting time"
+   - Reply with: 2026-06-13T12:30:00Z
+   - Use ist_to_utc.py to convert IST times!
+
+================================================================================
+🕐 IST TO UTC QUICK REFERENCE
+================================================================================
+
+IST 06:00 AM → UTC 12:30 AM → 2026-06-13T00:30:00Z
+IST 09:00 AM → UTC 03:30 AM → 2026-06-13T03:30:00Z
+IST 12:00 PM → UTC 06:30 AM → 2026-06-13T06:30:00Z
+IST 03:00 PM → UTC 09:30 AM → 2026-06-13T09:30:00Z
+IST 06:00 PM → UTC 12:30 PM → 2026-06-13T12:30:00Z
+IST 09:00 PM → UTC 03:30 PM → 2026-06-13T15:30:00Z
+
+💡 Subtract 5:30 from IST to get UTC
+
+================================================================================
+📚 DETAILED GUIDES
+================================================================================
+
+Full command reference:  cat COMMANDS.txt
+IST converter tool:      python ist_to_utc.py
+Interactive menu:        ./quick_start.sh
+
+================================================================================
+🆘 TROUBLESHOOTING
+================================================================================
+
+Bot not responding?
+   → Check bot is running: ps aux | grep "python run.py bot"
+   → Restart: Ctrl+C then python run.py bot
+
+Can't schedule post?
+   → Post must be APPROVED first
+   → Approve via Telegram, then schedule
+
+Already exists error?
+   → Each day generates new unique post
+   → Check existing: sqlite3 data/gelio.db "SELECT id FROM posts;"
+
+================================================================================
+✨ EXAMPLE SESSION (Using /start command - EASIEST!)
+================================================================================
+
+# Terminal - Start bot
+cd /Users/nikhlbisht/Desktop/GenLio
+source .venv/bin/activate
+python run.py bot
+
+# Telegram - Generate & Approve
+Open GenLio_Bot → Send "/start" → Wait → Click "Schedule" → Reply "2026-06-13T12:30:00Z"
+
+# Verify
+python run.py list-scheduled
+
+Done! 🎉
+
+================================================================================
+✨ EXAMPLE SESSION (Using Command Line)
+================================================================================
+
+# Terminal 1 - Generate post
+cd /Users/nikhlbisht/Desktop/GenLio
+source .venv/bin/activate
+python run.py generate --render --approve
+
+# Terminal 2 - Start bot
+cd /Users/nikhlbisht/Desktop/GenLio  
+source .venv/bin/activate
+python run.py bot
+
+# Telegram - Interact
+Open GenLio_Bot → Click "Schedule" → Reply "2026-06-13T12:30:00Z"
+
+# Verify
+python run.py list-scheduled
+
+Done! 🎉
+
+================================================================================

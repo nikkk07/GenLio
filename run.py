@@ -22,6 +22,7 @@ from gelio.compositor import CompositorError
 from gelio.content_writer import ContentWriterError
 from gelio.llm import LLMError
 from gelio.pipeline import RenderResult, RunResult, build_pipeline, build_renderer
+from gelio.schemas import PostState
 from gelio.store import Store
 from gelio.sync import build_sync
 from gelio.topic_engine import TopicEngineError
@@ -95,6 +96,64 @@ def cmd_send_approval(args: argparse.Namespace) -> int:
         approval = build_approval(settings, store, build_sync(settings))
         approval.send_preview(args.id)
         print(f"Preview sent for {args.id} (AWAITING_APPROVAL)")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = Store(settings.db_path)
+    try:
+        from datetime import datetime, timezone
+        
+        # Parse scheduled time
+        try:
+            scheduled_dt = datetime.fromisoformat(args.time.replace('Z', '+00:00'))
+            if scheduled_dt.tzinfo is None:
+                # Assume UTC if no timezone provided
+                scheduled_dt = scheduled_dt.replace(tzinfo=timezone.utc)
+            scheduled_time = scheduled_dt.isoformat()
+        except ValueError as e:
+            print(f"ERROR: Invalid time format. Use ISO format: YYYY-MM-DDTHH:MM:SS or YYYY-MM-DDTHH:MM:SSZ")
+            print(f"Example: 2026-06-12T10:30:00Z")
+            return 1
+        
+        # Verify post exists and is approved
+        record = store.get_post(args.id)
+        if record is None:
+            print(f"ERROR: Post {args.id} not found")
+            return 1
+        
+        if record.state != PostState.APPROVED:
+            print(f"ERROR: Post {args.id} is {record.state.value}, must be APPROVED to schedule")
+            return 1
+        
+        # Set scheduled time
+        updated = store.set_scheduled_time(args.id, scheduled_time)
+        print(f"Scheduled {args.id} for {scheduled_time}")
+        print(f"  Concept: {updated.concept}")
+        print(f"  Current time: {datetime.now(timezone.utc).isoformat()}")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_list_scheduled(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    store = Store(settings.db_path)
+    try:
+        posts = store.get_posts_due_for_posting(args.before if hasattr(args, 'before') and args.before else None)
+        if not posts:
+            print("No posts scheduled for posting")
+            return 0
+        
+        print(f"Posts scheduled for posting ({len(posts)}):")
+        for p in posts:
+            print(f"  {p.id}")
+            print(f"    Concept: {p.concept}")
+            print(f"    Scheduled: {p.scheduled_time}")
+            print(f"    State: {p.state.value}")
         return 0
     finally:
         store.close()
@@ -194,6 +253,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     bot = sub.add_parser("bot", help="long-poll Telegram and handle approval buttons")
     bot.set_defaults(func=cmd_bot)
+
+    sched = sub.add_parser("schedule", help="schedule an approved post for a specific time")
+    sched.add_argument("id", help="post id, e.g. 2026-06-11-decision-fatigue")
+    sched.add_argument("time", help="ISO timestamp (UTC), e.g. 2026-06-12T10:30:00Z")
+    sched.set_defaults(func=cmd_schedule)
+
+    lsched = sub.add_parser("list-scheduled", help="list posts scheduled for posting")
+    lsched.add_argument("--before", help="show posts scheduled before this ISO timestamp", default=None)
+    lsched.set_defaults(func=cmd_list_scheduled)
+
     return parser
 
 
