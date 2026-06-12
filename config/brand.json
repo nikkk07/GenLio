@@ -21,6 +21,7 @@
   ],
   "contact": {
     "name": "We One Aviation",
+    "tagline": "Guiding Aspirations, Building Careers",
     "email": "info.weoneaviation@gmail.com",
     "phone": "+91-9667370747",
     "address": "C-404, Ramphal Chowk, Dwarka Sector 7, Delhi"
@@ -30,10 +31,11 @@
     "navy_panel": "#0A1A33",
     "blue": "#0B3D91",
     "gold": "#E8B33D",
+    "gold_light": "#F5C96B",
     "text": "#FFFFFF",
     "muted": "#C9D4E5",
     "slide_size": [1080, 1350],
-    "logo_path": "assets/logo.png",
+    "logo_path": "assets/fonts/logo.png",
     "headline_font": "Montserrat",
     "body_font": "Inter",
     "primary_color": "#0B3D91",

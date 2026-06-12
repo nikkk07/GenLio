@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from gelio.icons import ALLOWED_ICONS
 
 # --- Field length limits (kept as module constants so validators can reuse) ---
 HEADLINE_MAX = 60
@@ -24,6 +26,18 @@ BODY_MAX = 220
 CAPTION_LIMITS = {"linkedin": 1300, "instagram": 2200, "x": 280}
 HASHTAGS_MIN = 5
 HASHTAGS_MAX = 10
+# Phase 3.7 reference design system limits.
+HEADLINE_LINE_MAX = 26
+HEADLINE_LINES_MAX = 4
+SUBHEAD_MAX = 140
+TIP_MAX = 110
+PANEL_TITLE_MAX = 32
+ITEM_TITLE_MAX = 28
+ITEM_DESC_MAX = 70
+QUOTE_LINE_MAX = 60
+# Panel item-count ranges per panel type (min, max).
+PANEL_ITEM_RANGE = {"checklist": (3, 5), "grid4": (3, 4)}
+QUOTE_LINES_RANGE = (2, 3)
 
 
 class SlideRole(str, Enum):
@@ -72,6 +86,70 @@ class Brief(BaseModel):
     tone: str = Field(...)
     # Phase 3.5: short gold eyebrow label for the carousel (additive, optional).
     eyebrow: str | None = None
+    # Phase 3.7 (additive/optional): numbered-series title (slides become
+    # sequential steps) and one consistent person description reused in every
+    # slide's image_prompt so the carousel keeps a continuous "character".
+    series_title: str | None = None
+    subject_description: str | None = None
+
+
+class HeadlineLine(BaseModel):
+    """One line of the stacked two-tone display headline."""
+
+    model_config = {"extra": "forbid"}
+
+    text: Annotated[str, Field(min_length=1, max_length=HEADLINE_LINE_MAX)]
+    color: Literal["white", "gold"] = "white"
+
+
+class PanelItem(BaseModel):
+    """A checklist/grid row: gold icon + bold title + small description."""
+
+    model_config = {"extra": "forbid"}
+
+    icon: str
+    title: Annotated[str, Field(min_length=1, max_length=ITEM_TITLE_MAX)]
+    desc: Annotated[str, Field(min_length=1, max_length=ITEM_DESC_MAX)]
+
+    @field_validator("icon")
+    @classmethod
+    def _icon_known(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if cleaned not in ALLOWED_ICONS:
+            raise ValueError(f"unknown icon name: {value!r}")
+        return cleaned
+
+
+class Panel(BaseModel):
+    """The slide's content panel: checklist card, 3-4 column grid, or quote."""
+
+    model_config = {"extra": "forbid"}
+
+    type: Literal["checklist", "grid4", "quote"]
+    title: Annotated[str | None, Field(max_length=PANEL_TITLE_MAX)] = None
+    items: list[PanelItem] | None = None
+    quote_lines: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _shape_matches_type(self) -> "Panel":
+        if self.type in PANEL_ITEM_RANGE:
+            lo, hi = PANEL_ITEM_RANGE[self.type]
+            n = len(self.items or [])
+            if not (lo <= n <= hi):
+                raise ValueError(f"{self.type} panel needs {lo}-{hi} items, got {n}")
+        else:  # quote
+            lo, hi = QUOTE_LINES_RANGE
+            lines = self.quote_lines or []
+            if not (lo <= len(lines) <= hi):
+                raise ValueError(
+                    f"quote panel needs {lo}-{hi} quote_lines, got {len(lines)}"
+                )
+            for line in lines:
+                if not line.strip() or len(line) > QUOTE_LINE_MAX:
+                    raise ValueError(
+                        f"quote line must be 1-{QUOTE_LINE_MAX} chars: {line!r}"
+                    )
+        return self
 
 
 class Slide(BaseModel):
@@ -90,6 +168,16 @@ class Slide(BaseModel):
     image_prompt: str | None = None
     highlight: list[str] = Field(default_factory=list)
     eyebrow: str | None = None
+    # Phase 3.7 (additive/optional): stacked two-tone display headline, short
+    # subhead, icon panel, tip bar, and the series step number. ``headline``
+    # stays the flat text used for captions/meta and legacy rendering.
+    headline_lines: list[HeadlineLine] = Field(
+        default_factory=list, max_length=HEADLINE_LINES_MAX
+    )
+    subhead: Annotated[str | None, Field(max_length=SUBHEAD_MAX)] = None
+    panel: Panel | None = None
+    tip: Annotated[str | None, Field(max_length=TIP_MAX)] = None
+    step_number: Annotated[int | None, Field(ge=1)] = None
 
 
 class Captions(BaseModel):

@@ -49,6 +49,47 @@ def slugify(text: str, max_len: int = MAX_SLUG_LEN) -> str:
     return text
 
 
+# Used when the LLM omits a subject description; keeps the photo "character"
+# consistent across a carousel even on degraded LLM output.
+DEFAULT_SUBJECT_DESCRIPTION = "a young Indian pilot trainee in a crisp white uniform"
+
+# Titles like "10 Steps to Become a Pilot in India" are series requests.
+_SERIES_TITLE_RE = re.compile(
+    r"^\s*(\d{1,2})\s+(steps|ways|rules|habits|lessons|mistakes|signs|stages)\b",
+    re.IGNORECASE,
+)
+SERIES_SLIDES_MIN = 4
+SERIES_SLIDES_MAX = 10
+
+
+def parse_series_request(text: str) -> tuple[str | None, int | None]:
+    """Detect a series request in free text (CLI topic or Telegram reply).
+
+    Returns ``(series_title, suggested_slides)``. An explicit ``series:`` prefix
+    always wins; otherwise titles shaped like "10 Steps to ..." auto-detect,
+    suggesting one slide per step (clamped to a sane carousel size). Plain
+    topics return ``(None, None)``.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None, None
+    if cleaned.lower().startswith("series:"):
+        title = cleaned[len("series:"):].strip()
+        if not title:
+            return None, None
+        match = _SERIES_TITLE_RE.match(title)
+        count = int(match.group(1)) if match else None
+    else:
+        match = _SERIES_TITLE_RE.match(cleaned)
+        if not match:
+            return None, None
+        title = cleaned
+        count = int(match.group(1))
+    if count is not None:
+        count = max(SERIES_SLIDES_MIN, min(SERIES_SLIDES_MAX, count))
+    return title, count
+
+
 # Default cross-category weights (favor shareable, curiosity-driven angles).
 # Overridable via brand.json "topic_weights".
 DEFAULT_WEIGHTS = {
@@ -184,7 +225,10 @@ class TopicEngine:
 
     # -- brief construction --------------------------------------------------
     def build_brief(
-        self, run_date: str | None = None, concept_override: str | None = None
+        self,
+        run_date: str | None = None,
+        concept_override: str | None = None,
+        series_title: str | None = None,
     ) -> Brief:
         """Pick (or accept) a concept and return a validated :class:`Brief`.
 
@@ -192,8 +236,13 @@ class TopicEngine:
         Telegram regenerate request), bypassing bank selection. The aviation
         angle + hook are still generated, and the post is still recorded in the
         dedup log when persisted, so a forced topic cannot silently repeat.
+        ``series_title`` makes the carousel a numbered series: the title becomes
+        the concept and the content writer turns slides into sequential steps.
         """
-        if concept_override and concept_override.strip():
+        if series_title and series_title.strip():
+            concept = series_title.strip()
+            logger.info("building series brief: %s", concept)
+        elif concept_override and concept_override.strip():
             concept = concept_override.strip()
             logger.info("using forced concept override: %s", concept)
         else:
@@ -204,7 +253,9 @@ class TopicEngine:
         audience = self._brand.get("audience", "aspiring pilots / DGCA aspirants")
         tone = self._brand.get("tone", "authoritative but encouraging")
 
-        angle, hook, eyebrow = self._llm_angle_and_hook(concept, audience, tone)
+        angle, hook, eyebrow, subject = self._llm_angle_and_hook(
+            concept, audience, tone
+        )
 
         try:
             return Brief(
@@ -216,13 +267,15 @@ class TopicEngine:
                 audience=audience,
                 tone=tone,
                 eyebrow=eyebrow or None,
+                series_title=series_title.strip() if series_title else None,
+                subject_description=subject or DEFAULT_SUBJECT_DESCRIPTION,
             )
         except ValidationError as exc:
             raise TopicEngineError(f"brief failed validation: {exc}") from exc
 
     def _llm_angle_and_hook(
         self, concept: str, audience: str, tone: str
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str]:
         system = (
             f"You are gelio, content strategist for {self._brand.get('name')}, "
             f"an aviation training academy. Brand voice: "
@@ -233,11 +286,15 @@ class TopicEngine:
         user = (
             f"Frame the topic '{concept}' for the lived reality of aviation / DGCA "
             "/ pilot-training life. Favour a genuinely shareable, curiosity-driven "
-            "angle. Return JSON with exactly three keys:\n"
+            "angle. Return JSON with exactly four keys:\n"
             '  "aviation_angle": one sentence describing the specific pilot-life '
             "angle (e.g. why pilots err at the end of long duty days),\n"
             '  "hook": one scroll-stopping first-line hook (max 90 chars),\n'
-            '  "eyebrow": a 2-4 word UPPERCASE label (e.g. "THE REAL CHALLENGE").\n'
+            '  "eyebrow": a 2-4 word UPPERCASE label (e.g. "THE REAL CHALLENGE"),\n'
+            '  "subject_description": a short description of ONE person to appear '
+            "in every AI photo of this carousel (e.g. \"a young Indian woman in a "
+            'trainee pilot uniform, early 20s, confident\") — Indian context, no '
+            "real individuals.\n"
             "Make it concrete, fresh, and emotionally resonant for aspiring pilots.\n"
             "Return ONLY valid JSON. Every string value MUST be wrapped in double "
             "quotes and any internal quotes escaped."
@@ -246,8 +303,9 @@ class TopicEngine:
         angle = str(data.get("aviation_angle", "")).strip()
         hook = str(data.get("hook", "")).strip()
         eyebrow = str(data.get("eyebrow", "")).strip()
+        subject = str(data.get("subject_description", "")).strip()
         if not angle or not hook:
             raise TopicEngineError(
                 f"LLM returned incomplete angle/hook for {concept!r}: {data}"
             )
-        return angle, hook, eyebrow
+        return angle, hook, eyebrow, subject

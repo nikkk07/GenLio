@@ -1,15 +1,19 @@
 {% extends "base.html.j2" %}
 {% block content %}
-  {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
-  <h2 class="headline cta-headline">{{ headline_html | safe }}</h2>
-  <p class="subhead">{{ body }}</p>
-  <div class="cta-pill">{{ cta }}</div>
-  <div class="contact">
-    {% if contact.email %}<div class="row"><span class="ic">&#9993;</span>{{ contact.email }}</div>{% endif %}
-    {% if contact.phone %}<div class="row"><span class="ic">&#9742;</span>{{ contact.phone }}</div>{% endif %}
-    {% if contact.address %}<div class="row"><span class="ic">&#9678;</span>{{ contact.address }}</div>{% endif %}
+  <div class="closing-block">
+    <span class="wings">{{ icon("wings") | safe }}</span>
+    {% include "partials/stacked_headline.html.j2" %}
+    {% if subhead_html %}
+      <p class="subhead">{{ subhead_html | safe }}</p>
+    {% elif body %}
+      <p class="subhead">{{ body }}</p>
+    {% endif %}
+    <div class="cta-pill">{{ cta }}</div>
+    <div class="contact">
+      {% if contact.email %}<div class="row"><span class="ic">{{ icon("paper_plane") | safe }}</span>{{ contact.email }}</div>{% endif %}
+      {% if contact.phone %}<div class="row"><span class="ic">{{ icon("users") | safe }}</span>{{ contact.phone }}</div>{% endif %}
+      {% if contact.address %}<div class="row"><span class="ic">{{ icon("compass") | safe }}</span>{{ contact.address }}</div>{% endif %}
+    </div>
   </div>
 {% endblock %}
-{% block footer %}
-  <div class="counter">{{ index }}/{{ total }}</div>
-{% endblock %}
+{% block tip %}{% endblock %}

@@ -1,0 +1,44 @@
+{% if panel %}
+  {% if panel.type == "checklist" %}
+  <div class="panel panel--checklist">
+    {% if panel.title %}<div class="panel-title">{{ panel.title | safe }}</div>{% endif %}
+    {% for item in panel["items"] %}
+    <div class="panel-row">
+      <span class="row-icon">{{ item.icon_svg | safe }}</span>
+      <span class="row-text">
+        <span class="row-title">{{ item.title | safe }}</span>
+        <span class="row-desc">{{ item.desc | safe }}</span>
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif panel.type == "grid4" %}
+  <div class="panel panel--grid4">
+    {% if panel.title %}<div class="panel-title">{{ panel.title | safe }}</div>{% endif %}
+    <div class="grid-cols">
+      {% for item in panel["items"] %}
+      <div class="grid-col">
+        <span class="col-icon">{{ item.icon_svg | safe }}</span>
+        <div class="col-title">{{ item.title | safe }}</div>
+        <div class="col-desc">{{ item.desc | safe }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% elif panel.type == "quote" %}
+  <div class="panel panel--quote">
+    <span class="quote-icons">
+      <span class="quote-glyph">{{ icon("quote") | safe }}</span>
+      <span class="quote-plane">{{ icon("paper_plane") | safe }}</span>
+    </span>
+    <div class="quote-lines">
+      {% for q in panel.quote_lines %}
+      <div class="quote-line{{ ' gold' if loop.last else '' }}">{{ q | safe }}</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+{% elif body %}
+  {# legacy pre-3.7 artifact: render the flat body in a simple glass card #}
+  <div class="panel legacy-card"><p class="body">{{ body }}</p></div>
+{% endif %}

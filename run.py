@@ -65,6 +65,11 @@ def _print_render(render: RenderResult) -> None:
     print(
         f"  render:  {len(render.slide_paths)} slides {by_source} -> {render.pdf_path}"
     )
+    if render.degraded:
+        print(
+            "  WARNING: DEGRADED — too few real AI photos; most slides fell "
+            "back to the gradient. Check image provider keys/quota."
+        )
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -77,6 +82,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             render=render,
             force=args.force,
+            series_title=args.series,
         )
         _print_result(result)
 
@@ -227,6 +233,34 @@ def cmd_render(args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_test_image(args: argparse.Namespace) -> int:
+    """One live image-chain call: proves the Cloudflare/Together chain works."""
+    from gelio.visual_gen import build_generator, slide_seed
+
+    settings = load_settings()
+    visual = settings.brand.get("visual", {})
+    width, height = (int(x) for x in visual.get("slide_size", [1080, 1350]))
+    generator = build_generator(settings)
+    prompt = args.prompt or (
+        "a young Indian pilot trainee in a crisp white uniform standing on the "
+        "tarmac at golden hour, subject on the right third of the frame, left "
+        "side dark open sky, cinematic photography, high detail, no text, "
+        "no watermark, no logo"
+    )
+    result = generator.generate(prompt, width, height, slide_seed("test-image", 1))
+    out = settings.output_dir / "test-image.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(result.data)
+    print(f"test-image: source={result.source} seed={result.seed} -> {out}")
+    if result.source == "gradient":
+        print(
+            "WARNING: all AI providers failed — this is the gradient fallback, "
+            "not a real photo. Check CLOUDFLARE_*/TOGETHER_* keys and quota."
+        )
+        return 1
+    return 0
+
+
 def cmd_setup_assets(args: argparse.Namespace) -> int:
     settings = load_settings()
     paths = setup_assets(settings.fonts_dir, force=args.force, with_deps=args.with_deps)
@@ -268,6 +302,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="after rendering, send the post to Telegram for approval",
     )
+    gen.add_argument(
+        "--series",
+        default=None,
+        metavar="TITLE",
+        help='numbered-series title, e.g. "10 Steps to Become a Pilot in India" '
+        "(slides become sequential steps; the last slide is the closing/CTA)",
+    )
     gen.set_defaults(func=cmd_generate)
 
     rnd = sub.add_parser("render", help="render visuals for an existing artifact dir")
@@ -278,6 +319,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="re-render over existing slides instead of skipping",
     )
     rnd.set_defaults(func=cmd_render)
+
+    timg = sub.add_parser(
+        "test-image", help="fetch one live AI background to verify the image chain"
+    )
+    timg.add_argument(
+        "--prompt", default=None, help="override the default test prompt"
+    )
+    timg.set_defaults(func=cmd_test_image)
 
     setup = sub.add_parser(
         "setup-assets", help="download brand fonts + install Playwright Chromium"
