@@ -137,5 +137,6 @@ class PostRecord(BaseModel):
     rendered_at: str | None = None  # set by Phase 2 after slides + PDF are built
     regeneration_count: int = 0  # chain depth: original=0, each regen +1 (Phase 3)
     parent_id: str | None = None  # the rejected predecessor a regen was spawned from
+    scheduled_time: str | None = None  # ISO timestamp for when to post (Phase 4)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

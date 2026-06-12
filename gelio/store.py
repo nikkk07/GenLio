@@ -99,6 +99,10 @@ class Store:
         if "parent_id" not in cols:
             logger.info("migrating posts: adding parent_id column")
             self._conn.execute("ALTER TABLE posts ADD COLUMN parent_id TEXT;")
+        # Phase 4: scheduled posting time.
+        if "scheduled_time" not in cols:
+            logger.info("migrating posts: adding scheduled_time column")
+            self._conn.execute("ALTER TABLE posts ADD COLUMN scheduled_time TEXT;")
 
     def close(self) -> None:
         self._conn.close()
@@ -148,8 +152,8 @@ class Store:
             """
             INSERT INTO posts (id, concept, date, state, brief_path,
                                content_path, created_at, updated_at,
-                               regeneration_count, parent_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               regeneration_count, parent_id, scheduled_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.id,
@@ -162,15 +166,17 @@ class Store:
                 record.updated_at,
                 record.regeneration_count,
                 record.parent_id,
+                record.scheduled_time,
             ),
         )
         self._conn.commit()
         logger.info(
-            "recorded draft id=%s concept=%s parent=%s regen=%d",
+            "recorded draft id=%s concept=%s parent=%s regen=%d scheduled=%s",
             record.id,
             record.concept,
             record.parent_id,
             record.regeneration_count,
+            record.scheduled_time,
         )
         return record
 
@@ -216,5 +222,33 @@ class Store:
     def all_posts(self) -> list[PostRecord]:
         rows = self._conn.execute(
             "SELECT * FROM posts ORDER BY created_at"
+        ).fetchall()
+        return [PostRecord(**dict(r)) for r in rows]
+
+    def set_scheduled_time(self, post_id: str, scheduled_time: str) -> PostRecord:
+        """Set the scheduled posting time for an approved post."""
+        current = self.get_post(post_id)
+        if current is None:
+            raise StateTransitionError(f"unknown post id {post_id!r}")
+        ts = _now()
+        self._conn.execute(
+            "UPDATE posts SET scheduled_time = ?, updated_at = ? WHERE id = ?",
+            (scheduled_time, ts, post_id),
+        )
+        self._conn.commit()
+        logger.info("set scheduled_time id=%s time=%s", post_id, scheduled_time)
+        return self.get_post(post_id)  # type: ignore[return-value]
+
+    def get_posts_due_for_posting(self, before_time: str | None = None) -> list[PostRecord]:
+        """Get all APPROVED posts with scheduled_time <= before_time (or now if None)."""
+        if before_time is None:
+            before_time = _now()
+        rows = self._conn.execute(
+            """
+            SELECT * FROM posts
+            WHERE state = ? AND scheduled_time IS NOT NULL AND scheduled_time <= ?
+            ORDER BY scheduled_time
+            """,
+            (PostState.APPROVED.value, before_time),
         ).fetchall()
         return [PostRecord(**dict(r)) for r in rows]

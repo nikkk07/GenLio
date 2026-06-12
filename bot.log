@@ -1,0 +1,62 @@
+{"ts":"2026-06-12 11:14:59,926","level":"INFO","logger":"gelio.approval","msg":"bot started; long-polling for admin chat=7215079511"}
+{"ts":"2026-06-12 11:15:13,119","level":"WARNING","logger":"gelio.approval","msg":"getUpdates failed: telegram HTTP 409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"}
+{"ts":"2026-06-12 11:15:26,885","level":"INFO","logger":"gelio.approval","msg":"/start command received from chat=7215079511"}
+{"ts":"2026-06-12 11:15:37,717","level":"INFO","logger":"gelio.llm","msg":"llm call provider=groq"}
+{"ts":"2026-06-12 11:15:38,115","level":"INFO","logger":"gelio.pipeline","msg":"brief built id=2026-06-12-you-need-perfect-eyesight-to-fly concept=You need perfect eyesight to fly"}
+{"ts":"2026-06-12 11:15:38,116","level":"INFO","logger":"gelio.content_writer","msg":"content attempt 1/3 id=2026-06-12-you-need-perfect-eyesight-to-fly"}
+{"ts":"2026-06-12 11:15:38,116","level":"INFO","logger":"gelio.llm","msg":"llm call provider=groq"}
+{"ts":"2026-06-12 11:15:41,642","level":"INFO","logger":"gelio.content_writer","msg":"content valid on attempt 1 id=2026-06-12-you-need-perfect-eyesight-to-fly"}
+{"ts":"2026-06-12 11:15:41,642","level":"INFO","logger":"gelio.pipeline","msg":"content built id=2026-06-12-you-need-perfect-eyesight-to-fly slides=9"}
+{"ts":"2026-06-12 11:15:41,645","level":"INFO","logger":"gelio.store","msg":"recorded draft id=2026-06-12-you-need-perfect-eyesight-to-fly concept=You need perfect eyesight to fly parent=None regen=0 scheduled=None"}
+{"ts":"2026-06-12 11:15:41,652","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=1829985702"}
+{"ts":"2026-06-12 11:15:41,746","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:41,746","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=1829985702"}
+{"ts":"2026-06-12 11:15:42,792","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=1 source=gradient"}
+{"ts":"2026-06-12 11:15:42,792","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=1609152268"}
+{"ts":"2026-06-12 11:15:42,869","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:42,869","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=1609152268"}
+{"ts":"2026-06-12 11:15:43,371","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=2 source=gradient"}
+{"ts":"2026-06-12 11:15:43,371","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=788586025"}
+{"ts":"2026-06-12 11:15:43,483","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:43,483","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=788586025"}
+{"ts":"2026-06-12 11:15:43,983","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=3 source=gradient"}
+{"ts":"2026-06-12 11:15:43,983","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=610539536"}
+{"ts":"2026-06-12 11:15:44,133","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:44,133","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=610539536"}
+{"ts":"2026-06-12 11:15:44,693","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=4 source=gradient"}
+{"ts":"2026-06-12 11:15:44,693","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=1373149208"}
+{"ts":"2026-06-12 11:15:44,801","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:44,801","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=1373149208"}
+{"ts":"2026-06-12 11:15:45,320","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=5 source=gradient"}
+{"ts":"2026-06-12 11:15:45,320","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=1136047185"}
+{"ts":"2026-06-12 11:15:45,441","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:45,441","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=1136047185"}
+{"ts":"2026-06-12 11:15:45,951","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=6 source=gradient"}
+{"ts":"2026-06-12 11:15:45,952","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=2054837348"}
+{"ts":"2026-06-12 11:15:46,067","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:46,067","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=2054837348"}
+{"ts":"2026-06-12 11:15:46,602","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=7 source=gradient"}
+{"ts":"2026-06-12 11:15:46,602","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=2021952971"}
+{"ts":"2026-06-12 11:15:46,694","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:46,694","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=2021952971"}
+{"ts":"2026-06-12 11:15:47,196","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=8 source=gradient"}
+{"ts":"2026-06-12 11:15:47,196","level":"INFO","logger":"gelio.visual","msg":"image fetch provider=cloudflare seed=1194040799"}
+{"ts":"2026-06-12 11:15:47,315","level":"WARNING","logger":"gelio.visual","msg":"image provider=cloudflare failed, trying next: cloudflare HTTP 401: {"result":null,"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"messages":[]}"}
+{"ts":"2026-06-12 11:15:47,315","level":"INFO","logger":"gelio.visual","msg":"image source=gradient seed=1194040799"}
+{"ts":"2026-06-12 11:15:47,735","level":"INFO","logger":"gelio.pipeline","msg":"rendered slide id=2026-06-12-you-need-perfect-eyesight-to-fly index=9 source=gradient"}
+{"ts":"2026-06-12 11:15:47,859","level":"INFO","logger":"gelio.pdf","msg":"wrote pdf=/Users/nikhlbisht/Desktop/GenLio/output/2026-06-12-you-need-perfect-eyesight-to-fly/carousel.pdf pages=9"}
+{"ts":"2026-06-12 11:15:47,859","level":"INFO","logger":"gelio.store","msg":"marked rendered id=2026-06-12-you-need-perfect-eyesight-to-fly at=2026-06-12T05:45:47.859559+00:00"}
+{"ts":"2026-06-12 11:15:51,795","level":"WARNING","logger":"gelio.sync","msg":"supabase push_render failed id=2026-06-12-you-need-perfect-eyesight-to-fly: Client error '404 Not Found' for url 'https://syytqcadmtgowckdnbqh.supabase.co/rest/v1/storage/v1/object/slides/2026-06-12-you-need-perfect-eyesight-to-fly/slide_1.png'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404"}
+{"ts":"2026-06-12 11:15:51,795","level":"INFO","logger":"gelio.pipeline","msg":"render complete id=2026-06-12-you-need-perfect-eyesight-to-fly slides=9 sources={'gradient': 9}"}
+{"ts":"2026-06-12 11:15:56,035","level":"INFO","logger":"gelio.store","msg":"transition id=2026-06-12-you-need-perfect-eyesight-to-fly DRAFTED -> AWAITING_APPROVAL"}
+{"ts":"2026-06-12 11:15:59,536","level":"WARNING","logger":"gelio.sync","msg":"supabase push_state failed id=2026-06-12-you-need-perfect-eyesight-to-fly: Client error '404 Not Found' for url 'https://syytqcadmtgowckdnbqh.supabase.co/rest/v1/rest/v1/posts?on_conflict=id'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404"}
+{"ts":"2026-06-12 11:15:59,536","level":"INFO","logger":"gelio.approval","msg":"preview sent id=2026-06-12-you-need-perfect-eyesight-to-fly state=AWAITING_APPROVAL"}
+{"ts":"2026-06-12 11:15:59,536","level":"INFO","logger":"gelio.approval","msg":"/start generated and sent id=2026-06-12-you-need-perfect-eyesight-to-fly concept=You need perfect eyesight to fly"}
+{"ts":"2026-06-12 11:16:03,585","level":"WARNING","logger":"gelio.approval","msg":"getUpdates failed: telegram HTTP 409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"}
+{"ts":"2026-06-12 11:16:10,586","level":"WARNING","logger":"gelio.approval","msg":"getUpdates failed: telegram HTTP 409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"}
+{"ts":"2026-06-12 11:16:28,958","level":"INFO","logger":"gelio.store","msg":"transition id=2026-06-12-you-need-perfect-eyesight-to-fly AWAITING_APPROVAL -> REJECTED"}
+{"ts":"2026-06-12 11:16:33,333","level":"WARNING","logger":"gelio.sync","msg":"supabase push_state failed id=2026-06-12-you-need-perfect-eyesight-to-fly: Client error '404 Not Found' for url 'https://syytqcadmtgowckdnbqh.supabase.co/rest/v1/rest/v1/posts?on_conflict=id'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404"}
+{"ts":"2026-06-12 11:16:47,459","level":"WARNING","logger":"gelio.approval","msg":"getUpdates failed: telegram HTTP 409: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running"}
