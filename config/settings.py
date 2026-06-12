@@ -68,7 +68,8 @@ class Settings:
     cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"
     together_api_key: str = ""
     together_image_model: str = "black-forest-labs/FLUX.1-schnell-Free"
-    # Phase 3: Telegram approval gate.
+    # Phase 3: Telegram approval gate. ``telegram_admin_chat_id`` may be a
+    # comma-separated list — use ``telegram_admin_chat_ids`` for the parsed form.
     telegram_bot_token: str = ""
     telegram_admin_chat_id: str = ""
     max_regenerations_per_day: int = 3
@@ -76,6 +77,17 @@ class Settings:
     supabase_url: str = ""
     supabase_service_key: str = ""
     supabase_bucket: str = "slides"
+    # Phase 4: X (Twitter) publisher — OAuth 1.0a user context. All four keys
+    # must be present or the publisher is disabled.
+    x_consumer_key: str = ""
+    x_consumer_secret: str = ""
+    x_access_token: str = ""
+    x_access_token_secret: str = ""
+    x_max_images: int = 4  # X allows at most 4 images per tweet
+    # Phase 4: Instagram Graph API publisher (IG Business/Creator + FB Page).
+    ig_user_id: str = ""
+    ig_access_token: str = ""
+    ig_api_base: str = "https://graph.facebook.com/v19.0"
     default_slides: int = 9
     root_dir: Path = ROOT_DIR
     data_dir: Path = DATA_DIR
@@ -89,6 +101,24 @@ class Settings:
     def fallback_provider(self) -> str:
         """The provider used when the primary fails."""
         return "gemini" if self.provider == "groq" else "groq"
+
+    @property
+    def telegram_admin_chat_ids(self) -> list[str]:
+        """All admin chat ids (comma-separated env value), whitespace-tolerant."""
+        return [c.strip() for c in str(self.telegram_admin_chat_id).split(",") if c.strip()]
+
+
+def _normalize_supabase_url(raw: str) -> str:
+    """Strip API-path suffixes admins paste by mistake (``…/rest/v1/``).
+
+    sync.py appends ``/rest/v1/…`` and ``/storage/v1/…`` itself; a suffixed URL
+    produced doubled paths and silent 404s on every push.
+    """
+    url = raw.strip().rstrip("/")
+    for suffix in ("/rest/v1", "/storage/v1", "/auth/v1"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+    return url.rstrip("/")
 
 
 def _load_brand(path: Path = BRAND_PATH) -> dict[str, Any]:
@@ -133,7 +163,15 @@ def load_settings() -> Settings:
         ).strip(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_admin_chat_id=os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip(),
-        supabase_url=os.getenv("SUPABASE_URL", "").strip().rstrip("/"),
+        supabase_url=_normalize_supabase_url(os.getenv("SUPABASE_URL", "")),
         supabase_service_key=os.getenv("SUPABASE_SERVICE_KEY", "").strip(),
         supabase_bucket=os.getenv("SUPABASE_BUCKET", "slides").strip(),
+        x_consumer_key=os.getenv("X_CONSUMER_KEY", "").strip(),
+        x_consumer_secret=os.getenv("X_CONSUMER_SECRET", "").strip(),
+        x_access_token=os.getenv("X_ACCESS_TOKEN", "").strip(),
+        x_access_token_secret=os.getenv("X_ACCESS_TOKEN_SECRET", "").strip(),
+        x_max_images=int(os.getenv("X_MAX_IMAGES", "4")),
+        ig_user_id=os.getenv("IG_USER_ID", "").strip(),
+        ig_access_token=os.getenv("IG_ACCESS_TOKEN", "").strip(),
+        ig_api_base=os.getenv("IG_API_BASE", "https://graph.facebook.com/v19.0").strip().rstrip("/"),
     )

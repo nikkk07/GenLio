@@ -74,7 +74,7 @@ sqlite3 data/gelio.db "SELECT id, concept, state FROM posts ORDER BY created_at 
 ================================================================================
 
 # Schedule a post (post must be APPROVED first)
-# Time format: YYYY-MM-DDTHH:MM:SSZ (always in UTC)
+# Time format: IST "YYYY-MM-DD HH:MM" (naive = IST, auto-converted) or explicit UTC "YYYY-MM-DDTHH:MM:SSZ"
 
 # Example 1: Schedule for tomorrow 2 PM IST (8:30 AM UTC)
 python run.py schedule 2026-06-11-aviation-institute-name-we-one-aviation "2026-06-13T08:30:00Z"
