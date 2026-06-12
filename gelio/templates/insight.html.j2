@@ -1,6 +1,8 @@
 {% extends "base.html.j2" %}
 {% block content %}
-  {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
-  <h2 class="headline insight-headline">{{ headline_html | safe }}</h2>
-  <div class="card"><p class="body"><span class="bullet">&#9656;</span>{{ body }}</p></div>
+  {% include "partials/eyebrow_chip.html.j2" %}
+  {% set headline_px = headline_px - 8 %}
+  {% include "partials/stacked_headline.html.j2" %}
+  {% include "partials/subhead.html.j2" %}
+  {% include "partials/panel.html.j2" %}
 {% endblock %}

@@ -15,6 +15,7 @@ BRAND: dict[str, Any] = {
     "voice": "Bright, simple, psychologically engaging.",
     "contact": {
         "name": "We One Aviation",
+        "tagline": "Guiding Aspirations, Building Careers",
         "email": "info.weoneaviation@gmail.com",
         "phone": "+91-9667370747",
         "address": "C-404, Ramphal Chowk, Dwarka Sector 7, Delhi",
@@ -32,6 +33,34 @@ BRAND: dict[str, Any] = {
 }
 
 
+def _panel_variant(i: int) -> dict[str, Any]:
+    """Cycle the three panel types so fixtures exercise every variant."""
+    variant = i % 3
+    if variant == 0:
+        return {
+            "type": "checklist",
+            "title": "WHAT YOU'VE BUILT",
+            "items": [
+                {"icon": "book", "title": "Ground school", "desc": "DGCA subjects done"},
+                {"icon": "medal", "title": "Medical", "desc": "Class 2 then Class 1"},
+                {"icon": "plane", "title": "Flight hours", "desc": "Logged and signed"},
+            ],
+        }
+    if variant == 1:
+        return {
+            "type": "grid4",
+            "items": [
+                {"icon": "target", "title": "Focus", "desc": "One subject at a time"},
+                {"icon": "chart_up", "title": "Progress", "desc": "Track every paper"},
+                {"icon": "users", "title": "Mentors", "desc": "Fly with guidance"},
+            ],
+        }
+    return {
+        "type": "quote",
+        "quote_lines": ["The runway is long.", "Your will is longer."],
+    }
+
+
 def make_content_dict(concept_id: str, slides: int, brand: dict[str, Any]) -> dict[str, Any]:
     """Build a schema-valid Content dict with the academy named in the CTA slide."""
     academy = brand["academy_short"]
@@ -41,7 +70,14 @@ def make_content_dict(concept_id: str, slides: int, brand: dict[str, Any]) -> di
             "role": "hook",
             "eyebrow": "THE REAL CHALLENGE",
             "headline": "The hook that stops the scroll",
-            "highlight": ["hook"],
+            "headline_lines": [
+                {"text": "THE HOOK THAT", "color": "white"},
+                {"text": "STOPS THE SCROLL", "color": "gold"},
+            ],
+            "subhead": "A curiosity gap that pulls aspiring pilots in.",
+            "panel": _panel_variant(1),
+            "tip": "Start with the *one question* every aspirant asks.",
+            "highlight": ["curiosity"],
             "body": "A curiosity gap that pulls aspiring pilots in.",
             "visual_direction": "cockpit at dawn, pilot silhouette",
             "image_prompt": "young Indian pilot center-right, open sky on the left",
@@ -54,7 +90,14 @@ def make_content_dict(concept_id: str, slides: int, brand: dict[str, Any]) -> di
                 "role": "insight",
                 "eyebrow": f"POINT {i}",
                 "headline": f"Insight number {i}",
-                "highlight": ["Insight"],
+                "headline_lines": [
+                    {"text": "INSIGHT", "color": "white"},
+                    {"text": f"NUMBER {i}", "color": "gold"},
+                ],
+                "subhead": f"One concrete idea {i} with a DGCA training example.",
+                "panel": _panel_variant(i),
+                "tip": f"Apply idea {i} to *your DGCA prep* today.",
+                "highlight": ["concrete"],
                 "body": f"One concrete idea {i} with a DGCA training example.",
                 "visual_direction": "training classroom, charts on wall",
                 "image_prompt": "student near a small aircraft, sky on the left",
@@ -66,6 +109,11 @@ def make_content_dict(concept_id: str, slides: int, brand: dict[str, Any]) -> di
             "role": "cta",
             "eyebrow": "READY TO SOAR",
             "headline": f"Fly with {academy}",
+            "headline_lines": [
+                {"text": "YOU'RE READY.", "color": "white"},
+                {"text": "THE SKY IS YOURS.", "color": "gold"},
+            ],
+            "subhead": f"{academy} mentors you to the cockpit.",
             "highlight": [academy],
             "body": f"{academy} mentors you to the cockpit. {brand['cta_text']}",
             "visual_direction": "branded card, runway background",
@@ -127,6 +175,8 @@ class FakeLLM:
             return {
                 "aviation_angle": "Why pilots err at the end of long duty days.",
                 "hook": "The mistake every tired pilot is wired to make.",
+                "eyebrow": "THE REAL CHALLENGE",
+                "subject_description": "a young Indian pilot trainee in uniform",
             }
         if "carousel" in user:
             # id/cta are overwritten by the writer, so a placeholder id is fine.

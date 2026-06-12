@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,8 +50,21 @@ class RenderResult:
     post_id: str
     slide_paths: list[Path]
     pdf_path: Path
-    sources: list[str]  # per-slide: "pollinations" | "fallback"
+    sources: list[str]  # per-slide: "cloudflare" | "together" | "gradient"
     skipped: bool = False
+    degraded: bool = False  # too few real AI photos (gradient fallbacks)
+
+
+# A render is DEGRADED when fewer than this fraction of slides got a real AI
+# photo (the reference threshold: >= 7 of 9 slides).
+DEGRADED_PHOTO_FRACTION = 7 / 9
+
+
+def _is_degraded(sources: list[str]) -> bool:
+    if not sources:
+        return False
+    real = sum(1 for s in sources if s not in ("gradient", "fallback"))
+    return real < math.ceil(DEGRADED_PHOTO_FRACTION * len(sources))
 
 
 def _write_json(path: Path, model) -> None:
@@ -174,9 +188,20 @@ class Renderer:
                 self._sync.push_render(record, content, slide_paths, pdf_path, angle)
 
         by_source = {s: sources.count(s) for s in sorted(set(sources))}
+        degraded = _is_degraded(sources)
+        if degraded:
+            logger.warning(
+                "DEGRADED render id=%s: too few real AI photos sources=%s",
+                post_id,
+                by_source,
+            )
         logger.info("render complete id=%s slides=%d sources=%s", post_id, n, by_source)
         return RenderResult(
-            post_id=post_id, slide_paths=slide_paths, pdf_path=pdf_path, sources=sources
+            post_id=post_id,
+            slide_paths=slide_paths,
+            pdf_path=pdf_path,
+            sources=sources,
+            degraded=degraded,
         )
 
 
@@ -214,10 +239,13 @@ class Pipeline:
         render: bool = False,
         force: bool = False,
         concept_override: str | None = None,
+        series_title: str | None = None,
         parent_id: str | None = None,
         regeneration_count: int = 0,
     ) -> RunResult:
-        brief = self._engine.build_brief(concept_override=concept_override)
+        brief = self._engine.build_brief(
+            concept_override=concept_override, series_title=series_title
+        )
         logger.info("brief built id=%s concept=%s", brief.id, brief.concept)
 
         # Idempotency: detect an existing record before doing any writes.

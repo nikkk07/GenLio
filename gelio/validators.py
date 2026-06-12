@@ -8,7 +8,11 @@ Pydantic guarantees field types and length ceilings; this module enforces the
   * the last slide is the only ``cta`` and references the academy + CTA text,
   * middle slides are ``insight`` slides,
   * per-platform caption limits (re-checked here so the rule is explicit),
-  * 5–10 well-formed hashtags.
+  * 5–10 well-formed hashtags,
+  * Phase 3.7: every non-CTA slide carries the full reference structure
+    (stacked headline lines, subhead, icon panel, tip with exactly one
+    ``*highlighted phrase*``), eyebrows never duplicate headlines, and in
+    series mode step numbers run sequentially 1..N.
 
 Validation never trusts the model: failures are collected into a single
 :class:`ContentValidationError` whose ``errors`` list is fed back into the next
@@ -17,8 +21,10 @@ LLM attempt by the content writer.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from gelio.icons import ALLOWED_ICONS
 from gelio.schemas import (
     BODY_MAX,
     CAPTION_LIMITS,
@@ -26,8 +32,12 @@ from gelio.schemas import (
     HASHTAGS_MIN,
     HEADLINE_MAX,
     Content,
+    Slide,
     SlideRole,
 )
+
+# Exactly one *highlighted phrase* marker pair inside a tip.
+TIP_HIGHLIGHT_RE = re.compile(r"\*([^*]+)\*")
 
 
 class ContentValidationError(ValueError):
@@ -38,11 +48,55 @@ class ContentValidationError(ValueError):
         super().__init__("; ".join(errors))
 
 
+def _validate_design_fields(slide: Slide, errors: list[str]) -> None:
+    """Phase 3.7 per-slide structure rules (skipped for the CTA slide)."""
+    if slide.role != SlideRole.CTA:
+        n_lines = len(slide.headline_lines)
+        if not (2 <= n_lines <= 4):
+            errors.append(
+                f"slide {slide.index} needs 2-4 headline_lines, got {n_lines}"
+            )
+        if not (slide.subhead or "").strip():
+            errors.append(f"slide {slide.index} is missing a subhead")
+        if slide.panel is None:
+            errors.append(
+                f"slide {slide.index} is missing a panel (checklist/grid4/quote)"
+            )
+        tip = (slide.tip or "").strip()
+        if not tip:
+            errors.append(f"slide {slide.index} is missing a tip")
+        elif len(TIP_HIGHLIGHT_RE.findall(tip)) != 1:
+            errors.append(
+                f"slide {slide.index} tip must contain exactly one *highlighted "
+                "phrase* (one pair of asterisks)"
+            )
+
+    # Eyebrow must never duplicate the headline (flat or stacked join).
+    eyebrow = (slide.eyebrow or "").strip().casefold()
+    if eyebrow:
+        flat = slide.headline.strip().casefold()
+        joined = " ".join(l.text for l in slide.headline_lines).strip().casefold()
+        if eyebrow == flat or (joined and eyebrow == joined):
+            errors.append(
+                f"slide {slide.index} eyebrow duplicates the headline; use a "
+                "different short label"
+            )
+
+    # Icon names: defense in depth (the writer coerces unknowns to 'star').
+    if slide.panel and slide.panel.items:
+        for item in slide.panel.items:
+            if item.icon not in ALLOWED_ICONS:
+                errors.append(
+                    f"slide {slide.index} panel uses unknown icon {item.icon!r}"
+                )
+
+
 def validate_content(
     content: Content,
     *,
     requested_slides: int,
     brand: dict[str, Any],
+    series: bool = False,
 ) -> None:
     """Validate business rules; raise :class:`ContentValidationError` if any fail."""
     errors: list[str] = []
@@ -88,6 +142,19 @@ def validate_content(
             errors.append(f"slide {slide.index} headline exceeds {HEADLINE_MAX} chars")
         if len(slide.body) > BODY_MAX:
             errors.append(f"slide {slide.index} body exceeds {BODY_MAX} chars")
+
+    # -- Phase 3.7 reference design structure --------------------------------
+    for slide in slides:
+        _validate_design_fields(slide, errors)
+
+    # -- series mode: step numbers run 1..N matching slide order -------------
+    if series:
+        for slide in slides:
+            if slide.step_number != slide.index:
+                errors.append(
+                    f"slide {slide.index} step_number must be {slide.index}, "
+                    f"got {slide.step_number}"
+                )
 
     # -- CTA slide must reference the academy and the CTA text --------------
     academy = str(brand.get("academy_short") or brand.get("name") or "").strip()

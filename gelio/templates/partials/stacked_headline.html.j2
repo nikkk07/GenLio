@@ -1,0 +1,5 @@
+<h1 class="stacked-headline" style="font-size:{{ headline_px }}px;">
+  {%- for line in headline_lines -%}
+    <span class="hl-line {{ line.color }}">{{ line.text | safe }}</span>
+  {%- endfor -%}
+</h1>

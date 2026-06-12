@@ -75,3 +75,71 @@ def test_aborts_after_three_invalid_attempts():
     writer = ContentWriter(FakeLLM(slides=9, responder=responder), BRAND)
     with pytest.raises(ContentWriterError):
         writer.write(_brief(), slides=9)
+
+
+def test_every_content_slide_has_panel_and_tip():
+    writer = ContentWriter(FakeLLM(slides=9), BRAND)
+    content = writer.write(_brief(), slides=9)
+    for slide in content.slides[:-1]:
+        assert slide.panel is not None
+        assert slide.tip
+        assert 2 <= len(slide.headline_lines) <= 4
+        assert slide.subhead
+
+
+def test_unknown_icon_coerced_to_star():
+    def responder(system: str, user: str):
+        raw = make_content_dict("placeholder", 9, BRAND)
+        raw["slides"][1]["panel"] = {
+            "type": "checklist",
+            "title": "CHECKS",
+            "items": [
+                {"icon": "rocketship", "title": "Bad icon", "desc": "Coerced"},
+                {"icon": "plane", "title": "Good icon", "desc": "Kept"},
+                {"icon": "WINGS", "title": "Case fixed", "desc": "Lowercased"},
+            ],
+        }
+        return raw
+
+    writer = ContentWriter(FakeLLM(slides=9, responder=responder), BRAND)
+    content = writer.write(_brief(), slides=9)
+    icons = [item.icon for item in content.slides[1].panel.items]
+    assert icons == ["star", "plane", "wings"]
+
+
+def test_image_prompts_rebuilt_with_subject_and_composition():
+    brief = _brief().model_copy(
+        update={"subject_description": "a young Indian pilot trainee, early 20s"}
+    )
+    writer = ContentWriter(FakeLLM(slides=9), BRAND)
+    content = writer.write(brief, slides=9)
+    for slide in content.slides:
+        assert slide.image_prompt.startswith("a young Indian pilot trainee")
+        assert "right third" in slide.image_prompt
+        assert "no watermark" in slide.image_prompt
+
+
+def test_series_step_numbers_forced_from_order():
+    brief = _brief().model_copy(
+        update={"series_title": "10 Steps to Become a Pilot in India"}
+    )
+
+    def responder(system: str, user: str):
+        raw = make_content_dict("placeholder", 9, BRAND)
+        raw["slides"][4]["step_number"] = 99  # writer must overwrite this
+        return raw
+
+    writer = ContentWriter(FakeLLM(slides=9, responder=responder), BRAND)
+    content = writer.write(brief, slides=9)
+    assert [s.step_number for s in content.slides] == list(range(1, 10))
+
+
+def test_non_series_strips_step_numbers():
+    def responder(system: str, user: str):
+        raw = make_content_dict("placeholder", 9, BRAND)
+        raw["slides"][2]["step_number"] = 7
+        return raw
+
+    writer = ContentWriter(FakeLLM(slides=9, responder=responder), BRAND)
+    content = writer.write(_brief(), slides=9)
+    assert all(s.step_number is None for s in content.slides)

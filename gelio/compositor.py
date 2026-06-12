@@ -28,7 +28,9 @@ from typing import Any, Protocol
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from PIL import Image
 
-from gelio.schemas import Slide, SlideRole
+from gelio.icons import icon_svg, normalize_icon
+from gelio.schemas import HeadlineLine, Panel, Slide, SlideRole
+from gelio.validators import TIP_HIGHLIGHT_RE
 
 logger = logging.getLogger("gelio.compositor")
 
@@ -59,6 +61,86 @@ def highlight_headline(headline: str, highlights: list[str]) -> str:
             lambda m: f'<span class="gold">{m.group(0)}</span>', safe, count=1
         )
     return safe
+
+
+def escape_lines(lines: list[HeadlineLine]) -> list[dict[str, str]]:
+    """HTML-escape stacked headline lines (LLM text is never trusted as HTML)."""
+    return [{"text": html_lib.escape(l.text), "color": l.color} for l in lines]
+
+
+def synthesize_lines(headline: str, highlights: list[str]) -> list[dict[str, str]]:
+    """Back-compat: build stacked lines from a flat headline (pre-3.7 artifacts).
+
+    Words wrap into up to 3 lines of ~16 chars; a line made entirely of
+    highlight terms goes gold, otherwise the last line does.
+    """
+    words = headline.split()
+    lines: list[list[str]] = [[]]
+    for word in words:
+        candidate = " ".join(lines[-1] + [word])
+        if lines[-1] and len(candidate) > 16 and len(lines) < 3:
+            lines.append([word])
+        else:
+            lines[-1].append(word)
+    hl = {h.strip().casefold() for h in highlights or [] if h.strip()}
+    out: list[dict[str, str]] = []
+    for i, line_words in enumerate(lines):
+        all_highlighted = bool(line_words) and all(
+            w.strip(".,!?").casefold() in hl for w in line_words
+        )
+        gold = all_highlighted or (hl == set() and i == len(lines) - 1)
+        out.append(
+            {
+                "text": html_lib.escape(" ".join(line_words)),
+                "color": "gold" if gold else "white",
+            }
+        )
+    if not any(l["color"] == "gold" for l in out):
+        out[-1]["color"] = "gold"
+    return out
+
+
+def headline_font_px(lines: list[dict[str, str]]) -> int:
+    """Deterministic auto-fit: longest line length + line count -> px size."""
+    longest = max((len(l["text"]) for l in lines), default=0)
+    px = 64
+    for limit, size in ((8, 110), (12, 96), (16, 84), (20, 74)):
+        if longest <= limit:
+            px = size
+            break
+    # Tall stacks trade size for vertical room so the panel never clips.
+    if len(lines) == 3:
+        px -= 14
+    elif len(lines) >= 4:
+        px -= 24
+    return max(56, px)
+
+
+def tip_html(tip: str) -> str:
+    """Escape the tip and turn its single ``*phrase*`` into a gold span."""
+    safe = html_lib.escape(tip)
+    return TIP_HIGHLIGHT_RE.sub(
+        lambda m: f'<span class="gold">{m.group(1)}</span>', safe, count=1
+    )
+
+
+def prep_panel(panel: Panel | None) -> dict[str, Any] | None:
+    """Escape panel strings and resolve item icons to inline SVG markup."""
+    if panel is None:
+        return None
+    return {
+        "type": panel.type,
+        "title": html_lib.escape(panel.title) if panel.title else None,
+        "items": [
+            {
+                "icon_svg": icon_svg(normalize_icon(item.icon)),
+                "title": html_lib.escape(item.title),
+                "desc": html_lib.escape(item.desc),
+            }
+            for item in panel.items or []
+        ],
+        "quote_lines": [html_lib.escape(q) for q in panel.quote_lines or []],
+    }
 
 
 def _data_uri(data: bytes, mime: str) -> str:
@@ -176,15 +258,17 @@ class Compositor:
             autoescape=select_autoescape(["html", "j2", "html.j2"], default=True),
         )
         self._colors = {
-            "navy": visual.get("navy", "#0A1F3D"),
+            "navy": visual.get("navy", "#0A1B33"),
             "navy_panel": visual.get("navy_panel", "#0A1A33"),
             "blue": visual.get("blue", "#0B3D91"),
             "gold": visual.get("gold", "#E8B33D"),
+            "gold_light": visual.get("gold_light", "#F5C96B"),
             "text": visual.get("text", "#FFFFFF"),
             "muted": visual.get("muted", "#C9D4E5"),
         }
         self._academy = brand.get("academy_short") or brand.get("name", "")
         self._contact = brand.get("contact", {})
+        self._tagline = self._contact.get("tagline") or brand.get("tagline", "")
         self._cta_text = brand.get("cta_text", "")
         self._font_faces = build_font_faces(fonts_dir) if fonts_dir else ""
         if fonts_dir and not self._font_faces:
@@ -203,6 +287,12 @@ class Compositor:
         self, slide: Slide, total: int, *, bg_data_uri: str = ""
     ) -> str:
         template = self._env.get_template(_ROLE_TEMPLATE[slide.role])
+        lines = (
+            escape_lines(slide.headline_lines)
+            if slide.headline_lines
+            else synthesize_lines(slide.headline, slide.highlight)
+        )
+        series = slide.step_number is not None
         return template.render(
             role=slide.role.value,
             w=self._w,
@@ -213,13 +303,27 @@ class Compositor:
             logo_data_uri=self._logo_uri,
             wordmark=self._academy.upper(),
             academy=self._academy,
+            tagline=self._tagline.upper() if self._tagline else "",
             index=slide.index,
             total=total,
+            step_label="STEP" if series else "SLIDE",
+            step_number=slide.step_number if series else slide.index,
+            is_last=slide.index == total,
             eyebrow=slide.eyebrow,
+            headline_lines=lines,
+            headline_px=headline_font_px(lines),
             headline_html=highlight_headline(slide.headline, slide.highlight),
+            subhead_html=(
+                highlight_headline(slide.subhead, slide.highlight)
+                if slide.subhead
+                else ""
+            ),
+            panel=prep_panel(slide.panel),
+            tip_html=tip_html(slide.tip) if slide.tip else "",
             body=slide.body,
             cta=self._cta_text,
             contact=self._contact,
+            icon=icon_svg,
         )
 
     # -- render -------------------------------------------------------------
@@ -236,6 +340,12 @@ class Compositor:
         texts = [slide.headline, slide.body]
         if slide.eyebrow:
             texts.append(slide.eyebrow)
+        if slide.subhead:
+            texts.append(slide.subhead)
+        if slide.tip:
+            texts.append(slide.tip)
+        if slide.panel and slide.panel.title:
+            texts.append(slide.panel.title)
         if slide.role == SlideRole.CTA:
             texts.append(self._cta_text)
             texts.extend(

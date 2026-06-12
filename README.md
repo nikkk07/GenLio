@@ -106,7 +106,27 @@ python run.py render 2026-06-11-decision-fatigue
 # Re-render over existing slides (otherwise a complete slides/ dir is skipped).
 python run.py render 2026-06-11-decision-fatigue --force
 python run.py generate --render --force
+
+# Verify the AI image chain with one live call (saves output/test-image.png).
+python run.py test-image
 ```
+
+### Series mode (Phase 3.7)
+
+```bash
+# A numbered-steps carousel: slide N is step N; the last step is the closing/CTA.
+python run.py generate --series "10 Steps to Become a Pilot in India" --slides 10 --render
+```
+
+Every slide gets a `step_number` and the top-right badge renders **STEP N**
+(non-series carousels show **SLIDE N** in the same style). The Telegram
+Regenerate flow also accepts series topics: type a title shaped like
+`10 Steps to ...` (auto-detected, one slide per step) or force it with
+`series: My Title`.
+
+If fewer than ~7/9 of a render's slides got a real AI photo (the rest fell
+back to the branded gradient), the render is flagged **DEGRADED** — a warning
+is logged and printed so you can check provider keys/quota before approving.
 
 ### Phase 3 — Telegram approval gate
 
@@ -319,7 +339,15 @@ supabase/schema.sql     dashboard table + RLS to run in the Supabase SQL editor
 {
   "id": "2026-06-11-decision-fatigue",
   "slides": [
-    {"index": 1, "role": "hook", "headline": "<= 60 chars",
+    {"index": 1, "role": "hook", "headline": "<= 60 chars (flat, for captions)",
+     "headline_lines": [{"text": "<= 26 chars", "color": "white|gold"}],
+     "subhead": "<= 140 chars",
+     "panel": {"type": "checklist|grid4|quote", "title": "<= 32 chars",
+               "items": [{"icon": "from the icon list", "title": "<= 28",
+                          "desc": "<= 70"}],
+               "quote_lines": ["2-3 short lines (quote type only)"]},
+     "tip": "<= 110 chars with exactly one *gold phrase*",
+     "step_number": "1..N in series mode, else absent",
      "body": "<= 220 chars", "visual_direction": "scene for image gen"}
   ],
   "captions": {"linkedin": "<= 1300", "instagram": "<= 2200", "x": "<= 280"},
@@ -331,7 +359,16 @@ supabase/schema.sql     dashboard table + RLS to run in the Supabase SQL editor
 Slide roles: slide 1 = `hook`, slides 2..N-1 = `insight`, last slide = `cta`
 (its headline/body reference the academy and the CTA text from `brand.json`).
 Validators enforce: slide count, char limits, exactly one hook first and one cta
-last, caption limits, and 5–10 hashtags.
+last, caption limits, and 5–10 hashtags. Phase 3.7 adds: every non-CTA slide
+must carry 2–4 `headline_lines`, a `subhead`, a `panel` and a `tip` (exactly one
+`*highlighted phrase*`); the `eyebrow` must differ from the headline; panel
+counts are 3–5 items (checklist), 3–4 (grid4) or 2–3 `quote_lines` (quote); in
+series mode `step_number` must run 1..N.
+
+**Icon list** (panels reference icons by name; unknown names are coerced to
+`star`): `badge, book, bulb, chart_up, check, clipboard, compass, globe,
+graduation, medal, paper_plane, plane, quote, shield, star, takeoff, target,
+trophy, users, wings`.
 
 ### `brand.json` → `contact` + `visual` (Phase 3.5)
 
@@ -339,19 +376,23 @@ last, caption limits, and 5–10 hashtags.
 {
   "contact": {
     "name": "We One Aviation",
+    "tagline": "Guiding Aspirations, Building Careers",
     "email": "info.weoneaviation@gmail.com",
     "phone": "+91-9667370747",
     "address": "C-404, Ramphal Chowk, Dwarka Sector 7, Delhi"
   },
   "visual": {
     "navy": "#0A1F3D", "navy_panel": "#0A1A33", "blue": "#0B3D91",
-    "gold": "#E8B33D", "text": "#FFFFFF", "muted": "#C9D4E5",
+    "gold": "#E8B33D", "gold_light": "#F5C96B",
+    "text": "#FFFFFF", "muted": "#C9D4E5",
     "slide_size": [1080, 1350],
-    "logo_path": "assets/logo.png",
+    "logo_path": "assets/fonts/logo.png",
     "headline_font": "Montserrat", "body_font": "Inter"
   }
 }
 ```
+
+- `contact.tagline` renders in small caps under the logo on every slide.
 
 - `contact` renders on the CTA slide (email / phone / address with gold icons).
 - `visual` tokens theme the templates via CSS variables; `slide_size` defaults to

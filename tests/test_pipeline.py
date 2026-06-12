@@ -163,6 +163,43 @@ def test_render_idempotent_without_force(tmp_path):
         store.close()
 
 
+def test_series_generates_sequential_steps_ending_in_cta(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    renderer = _fake_renderer(settings, store)
+    pipeline = Pipeline(settings, FakeLLM(slides=10, brand=BRAND), store, renderer=renderer)
+    try:
+        result = pipeline.generate(
+            slides=10,
+            dry_run=False,
+            render=True,
+            series_title="10 Steps to Become a Pilot in India",
+        )
+    finally:
+        store.close()
+
+    assert result.brief.series_title == "10 Steps to Become a Pilot in India"
+    assert result.brief.concept == "10 Steps to Become a Pilot in India"
+    slides = result.content.slides
+    assert len(slides) == 10
+    assert [s.step_number for s in slides] == list(range(1, 11))
+    assert slides[-1].role.value == "cta"
+    assert len(result.render.slide_paths) == 10
+
+
+def test_degraded_flag_set_when_all_gradient(tmp_path):
+    settings = _settings(tmp_path)
+    store = Store(settings.db_path)
+    renderer = _fake_renderer(settings, store)  # providers=[] -> all gradient
+    pipeline = Pipeline(settings, FakeLLM(slides=9, brand=BRAND), store, renderer=renderer)
+    try:
+        result = pipeline.generate(slides=9, dry_run=False, render=True)
+    finally:
+        store.close()
+    assert set(result.render.sources) == {"gradient"}
+    assert result.render.degraded is True
+
+
 def test_five_runs_five_distinct_concepts(tmp_path):
     settings = _settings(tmp_path)
     # widen the bank so five runs are possible

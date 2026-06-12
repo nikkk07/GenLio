@@ -728,15 +728,20 @@ def build_approval(settings: Settings, store: Store, sync: SupabaseSync) -> Appr
 
     def _regen(parent_id: str, concept_override: str | None) -> str:
         from gelio.pipeline import build_pipeline  # local import avoids a cycle
+        from gelio.topic_engine import parse_series_request
 
+        # A typed topic shaped like "10 Steps to ..." (or "series: <title>")
+        # regenerates as a numbered series instead of a plain carousel.
+        series_title, series_slides = parse_series_request(concept_override or "")
         pipeline, pstore = build_pipeline(settings)
         try:
             parent = store.get_post(parent_id)
             rc = (parent.regeneration_count if parent else 0) + 1
             result = pipeline.generate(
-                slides=settings.default_slides,
+                slides=series_slides or settings.default_slides,
                 render=True,
-                concept_override=concept_override,
+                concept_override=None if series_title else concept_override,
+                series_title=series_title,
                 parent_id=parent_id,
                 regeneration_count=rc,
             )

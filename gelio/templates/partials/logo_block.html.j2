@@ -1,0 +1,9 @@
+<div class="logo-block">
+  {% if logo_data_uri %}
+    <img class="logo" src="{{ logo_data_uri }}" alt="{{ academy }}">
+  {% else %}
+    <div class="wordmark">{{ wordmark }}</div>
+  {% endif %}
+  {% if tagline %}<div class="tagline">{{ tagline }}</div>{% endif %}
+  <div class="gold-divider"><span class="spark">{{ icon("star") | safe }}</span></div>
+</div>

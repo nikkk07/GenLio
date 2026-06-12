@@ -8,8 +8,10 @@
   --navy-panel: {{ c.navy_panel }};
   --blue: {{ c.blue }};
   --gold: {{ c.gold }};
+  --gold-light: {{ c.gold_light }};
   --text: {{ c.text }};
   --muted: {{ c.muted }};
+  --hairline: rgba(232,179,61,.35);
 }
 {{ font_faces | safe }}
 {% include "styles.css" %}
@@ -17,35 +19,50 @@
 </head>
 <body>
   <div class="slide role-{{ role }}" style="width:{{ w }}px;height:{{ h }}px;">
-    <img class="bg" src="{{ bg_data_uri }}" alt="">
-    <div class="scrim-left"></div>
-    <div class="scrim-bottom"></div>
+    <div class="glow"></div>
 
-    <svg class="plane-trail" viewBox="0 0 360 300" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M10 280 C 120 240, 210 150, 350 30" stroke="{{ c.gold }}" stroke-width="3"
-            stroke-linecap="round" stroke-dasharray="2 16"/>
-      <path d="M333 18 l22 6 l-12 18 z" fill="{{ c.gold }}"/>
-    </svg>
+    <div class="photo-zone">
+      {% if bg_data_uri %}<img class="bg" src="{{ bg_data_uri }}" alt="">{% endif %}
+      <div class="photo-mask"></div>
+      <div class="photo-mask-bottom"></div>
+    </div>
+
+    {% include "partials/decor.html.j2" %}
 
     <header class="topbar">
-      {% if logo_data_uri %}
-        <img class="logo" src="{{ logo_data_uri }}" alt="{{ academy }}">
-      {% else %}
-        <div class="wordmark">{{ wordmark }}</div>
-      {% endif %}
-      <div class="gold-rule"></div>
+      {% include "partials/logo_block.html.j2" %}
+      {% include "partials/step_badge.html.j2" %}
     </header>
 
     <main class="content">
-      {% block content %}{% endblock %}
+      <div class="content-fit">
+        {% block content %}{% endblock %}
+      </div>
     </main>
+
+    {% block tip %}
+      {% if tip_html %}{% include "partials/tip_bar.html.j2" %}{% endif %}
+    {% endblock %}
 
     <footer class="footer">
       {% block footer %}
-      <div class="counter">{{ index }}/{{ total }}</div>
-      <div class="swipe">Swipe &rarr;</div>
+        {% include "partials/swipe_pill.html.j2" %}
       {% endblock %}
     </footer>
   </div>
+  <script>
+    /* Auto-fit safety net: if the content column overflows its box (max-length
+       copy, tall panels), shrink it via zoom instead of clipping. */
+    (function () {
+      var box = document.querySelector(".content");
+      var fit = document.querySelector(".content-fit");
+      if (!box || !fit) return;
+      for (var i = 0; i < 5; i++) {
+        if (box.scrollHeight <= box.clientHeight + 1) break;
+        var z = parseFloat(fit.style.zoom || 1) * (box.clientHeight / box.scrollHeight);
+        fit.style.zoom = Math.max(0.55, z);
+      }
+    })();
+  </script>
 </body>
 </html>
