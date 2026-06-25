@@ -45,6 +45,12 @@ jobs:
       TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
 
     steps:
+      - name: Debug secret presence
+        run: |
+          echo "GROQ set: ${{ secrets.GROQ_API_KEY != '' }}"
+          echo "TELEGRAM set: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}"
+          echo "SUPABASE set: ${{ secrets.SUPABASE_URL != '' }}"
+
       - name: Checkout
         uses: actions/checkout@v4
 
