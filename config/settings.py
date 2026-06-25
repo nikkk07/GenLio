@@ -72,11 +72,17 @@ class Settings:
     # comma-separated list — use ``telegram_admin_chat_ids`` for the parsed form.
     telegram_bot_token: str = ""
     telegram_admin_chat_id: str = ""
+    # Phase 5: shared secret in Telegram's webhook header; set when running the
+    # serverless webhook so spoofed POSTs are rejected (empty = long-poll only).
+    telegram_webhook_secret: str = ""
     max_regenerations_per_day: int = 3
     # Phase 3: optional Supabase sync (feature-flagged on supabase_url).
     supabase_url: str = ""
     supabase_service_key: str = ""
     supabase_bucket: str = "slides"
+    # Phase 5: authoritative state backend — "sqlite" (local dev, default) or
+    # "supabase" (production: ephemeral CI runner + webhook share Supabase).
+    state_backend: str = "sqlite"
     # Phase 4: X (Twitter) publisher — OAuth 1.0a user context. All four keys
     # must be present or the publisher is disabled.
     x_consumer_key: str = ""
@@ -163,9 +169,11 @@ def load_settings() -> Settings:
         ).strip(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_admin_chat_id=os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip(),
+        telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),
         supabase_url=_normalize_supabase_url(os.getenv("SUPABASE_URL", "")),
         supabase_service_key=os.getenv("SUPABASE_SERVICE_KEY", "").strip(),
         supabase_bucket=os.getenv("SUPABASE_BUCKET", "slides").strip(),
+        state_backend=os.getenv("GELIO_STATE", "sqlite").strip().lower(),
         x_consumer_key=os.getenv("X_CONSUMER_KEY", "").strip(),
         x_consumer_secret=os.getenv("X_CONSUMER_SECRET", "").strip(),
         x_access_token=os.getenv("X_ACCESS_TOKEN", "").strip(),

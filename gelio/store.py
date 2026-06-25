@@ -1,19 +1,35 @@
-"""SQLite persistence: topic dedup, run history, and the post state machine.
+"""Post persistence + the post state machine.
 
-The store is deliberately thin and synchronous. It owns one table, ``posts``,
-which doubles as the source of truth for "which concepts have been used" (a
-concept is used once it has a row). Allowed state transitions are enforced in
-code so later phases get a real state machine, not a free-for-all status column.
+The store owns one logical table, ``posts``, which doubles as the source of
+truth for "which concepts have been used" (a concept is used once it has a
+row). Allowed state transitions are enforced in code — shared by every backend
+via :func:`check_transition` — so the state machine is identical regardless of
+where rows live.
+
+Two backends implement the :class:`StateStore` interface:
+
+* :class:`SqliteStore` (default; local dev) — a thin synchronous wrapper around
+  a local SQLite file. ``Store`` is kept as a backwards-compatible alias.
+* :class:`~gelio.supabase_store.SupabaseStore` (``GELIO_STATE=supabase``;
+  production) — the authoritative shared state for the ephemeral GitHub Actions
+  runner + Telegram webhook, persisted in Supabase via PostgREST.
+
+Pick a backend with :func:`build_store`, keyed on ``settings.state_backend``.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from gelio.schemas import PostRecord, PostState
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from config.settings import Settings
 
 logger = logging.getLogger("gelio.store")
 
@@ -54,14 +70,90 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class Store:
+def check_transition(post_id: str, current: PostState, new_state: PostState) -> None:
+    """Raise :class:`StateTransitionError` if ``current -> new_state`` is illegal.
+
+    Centralised so every backend (SQLite, Supabase) enforces the *identical*
+    state machine — the rules live here, not duplicated per store.
+    """
+    if new_state not in _ALLOWED.get(current, set()):
+        raise StateTransitionError(
+            f"illegal transition {current.value} -> {new_state.value} for {post_id!r}"
+        )
+
+
+class StateStore(ABC):
+    """The persistence contract shared by every backend.
+
+    Both :class:`SqliteStore` and :class:`~gelio.supabase_store.SupabaseStore`
+    implement this so the pipeline, approval flow, and publisher are agnostic to
+    where state lives. Behaviour (idempotent transitions, dedup exclusion,
+    completion semantics) must be identical across backends.
+    """
+
+    # -- topic dedup ---------------------------------------------------------
+    @abstractmethod
+    def used_concepts(self) -> set[str]: ...
+
+    @abstractmethod
+    def count_regenerations(self, date: str) -> int: ...
+
+    # -- post records --------------------------------------------------------
+    @abstractmethod
+    def get_post(self, post_id: str) -> PostRecord | None: ...
+
+    @abstractmethod
+    def record_draft(self, record: PostRecord) -> PostRecord: ...
+
+    @abstractmethod
+    def mark_rendered(self, post_id: str) -> PostRecord: ...
+
+    @abstractmethod
+    def transition(self, post_id: str, new_state: PostState) -> PostRecord: ...
+
+    @abstractmethod
+    def all_posts(self) -> list[PostRecord]: ...
+
+    # -- scheduling ----------------------------------------------------------
+    @abstractmethod
+    def set_scheduled_time(self, post_id: str, scheduled_time: str) -> PostRecord: ...
+
+    @abstractmethod
+    def get_posts_due_for_posting(
+        self, before_time: str | None = None, *, include_unscheduled: bool = False
+    ) -> list[PostRecord]: ...
+
+    # -- per-platform publish tracking ---------------------------------------
+    @abstractmethod
+    def set_platform_result(
+        self, post_id: str, platform: str, status: str, ref_id: str | None = None
+    ) -> PostRecord: ...
+
+    @abstractmethod
+    def set_handled_by(self, post_id: str, admin_chat_id: str) -> None: ...
+
+    # -- lifecycle -----------------------------------------------------------
+    def close(self) -> None:  # pragma: no cover - trivial default
+        """Release any held resources. Stateless backends may no-op."""
+
+    def __enter__(self) -> "StateStore":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class SqliteStore(StateStore):
     """A connection-owning wrapper around the gelio SQLite database."""
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = str(db_path)
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: gelio serialises all access (one update at a
+        # time), but ASGI servers run handlers in a worker thread, so allow the
+        # connection to be used from a thread other than the one that built it.
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self.init_db()
@@ -125,7 +217,7 @@ class Store:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self) -> "Store":
+    def __enter__(self) -> "SqliteStore":
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -221,11 +313,7 @@ class Store:
         current = self.get_post(post_id)
         if current is None:
             raise StateTransitionError(f"unknown post id {post_id!r}")
-        if new_state not in _ALLOWED.get(current.state, set()):
-            raise StateTransitionError(
-                f"illegal transition {current.state.value} -> {new_state.value} "
-                f"for {post_id!r}"
-            )
+        check_transition(post_id, current.state, new_state)
         ts = _now()
         self._conn.execute(
             "UPDATE posts SET state = ?, updated_at = ? WHERE id = ?",
@@ -318,3 +406,28 @@ class Store:
             (str(admin_chat_id), _now(), post_id),
         )
         self._conn.commit()
+
+
+# Backwards-compatible alias: ``Store`` was the only (SQLite) backend before
+# Phase 5 made state pluggable. Existing imports and tests keep working.
+Store = SqliteStore
+
+
+def build_store(settings: "Settings") -> StateStore:
+    """Select the state backend from ``settings.state_backend``.
+
+    ``"sqlite"`` (default) → local :class:`SqliteStore`; ``"supabase"`` →
+    :class:`~gelio.supabase_store.SupabaseStore` (authoritative shared state for
+    the ephemeral CI runner + webhook). The Supabase import is lazy so local dev
+    never needs the production deps wired up.
+    """
+    backend = (settings.state_backend or "sqlite").strip().lower()
+    if backend == "sqlite":
+        return SqliteStore(settings.db_path)
+    if backend == "supabase":
+        from gelio.supabase_store import SupabaseStore
+
+        return SupabaseStore.from_settings(settings)
+    raise ValueError(
+        f"unknown GELIO_STATE={backend!r}; expected 'sqlite' or 'supabase'"
+    )

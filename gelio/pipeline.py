@@ -22,7 +22,7 @@ from gelio.content_writer import IMAGE_STYLE_SUFFIX, ContentWriter
 from gelio.llm import JSONLLM, build_client
 from gelio.pdf_builder import build_pdf
 from gelio.schemas import Brief, Content, PostRecord, PostState
-from gelio.store import Store
+from gelio.store import StateStore, build_store
 from gelio.sync import SupabaseSync, build_sync
 from gelio.topic_engine import TopicEngine
 from gelio.visual_gen import VisualGenerator, build_generator, slide_seed
@@ -95,7 +95,7 @@ class Renderer:
         self,
         settings: Settings,
         visual: VisualGenerator,
-        store: Store,
+        store: StateStore,
         compositor: Compositor | None = None,
         sync: SupabaseSync | None = None,
     ) -> None:
@@ -212,7 +212,7 @@ class Pipeline:
         self,
         settings: Settings,
         llm: JSONLLM,
-        store: Store,
+        store: StateStore,
         renderer: Renderer | None = None,
     ) -> None:
         self._settings = settings
@@ -305,13 +305,13 @@ class Pipeline:
         )
 
 
-def build_pipeline(settings: Settings | None = None) -> tuple[Pipeline, Store]:
+def build_pipeline(settings: Settings | None = None) -> tuple[Pipeline, StateStore]:
     """Construct a Pipeline with live settings, LLM client, and store.
 
     Returns the pipeline and the owning store so the caller can close it.
     """
     settings = settings or load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     llm = build_client(settings)
     visual = build_generator(settings)
     sync = build_sync(settings)
@@ -319,13 +319,13 @@ def build_pipeline(settings: Settings | None = None) -> tuple[Pipeline, Store]:
     return Pipeline(settings, llm, store, renderer=renderer), store
 
 
-def build_renderer(settings: Settings | None = None) -> tuple[Renderer, Store]:
+def build_renderer(settings: Settings | None = None) -> tuple[Renderer, StateStore]:
     """Construct a standalone Renderer (no LLM) for ``render <id>``.
 
     Returns the renderer and owning store so the caller can close it.
     """
     settings = settings or load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     visual = build_generator(settings)
     sync = build_sync(settings)
     return Renderer(settings, visual, store, sync=sync), store

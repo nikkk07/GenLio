@@ -24,7 +24,7 @@ from gelio.llm import LLMError
 from gelio.pipeline import RenderResult, RunResult, build_pipeline, build_renderer
 from gelio.publisher import PublishError
 from gelio.schemas import PostState
-from gelio.store import Store
+from gelio.store import build_store
 from gelio.sync import build_sync
 from gelio.topic_engine import TopicEngineError
 from config.settings import load_settings
@@ -89,8 +89,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
         if args.approve and not args.dry_run:
             settings = load_settings()
             approval = build_approval(settings, store, build_sync(settings))
-            approval.send_preview(result.brief.id)
-            print(f"  approval: preview sent to Telegram admin (AWAITING_APPROVAL)")
+            degraded = bool(result.render and result.render.degraded)
+            approval.send_preview(result.brief.id, degraded=degraded)
+            note = " (⚠️ DEGRADED)" if degraded else ""
+            print(f"  approval: preview sent to Telegram admin (AWAITING_APPROVAL){note}")
         return 0
     finally:
         store.close()
@@ -98,7 +100,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 def cmd_send_approval(args: argparse.Namespace) -> int:
     settings = load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     try:
         approval = build_approval(settings, store, build_sync(settings))
         approval.send_preview(args.id)
@@ -110,7 +112,7 @@ def cmd_send_approval(args: argparse.Namespace) -> int:
 
 def cmd_schedule(args: argparse.Namespace) -> int:
     settings = load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     try:
         from datetime import datetime, timezone
 
@@ -156,7 +158,7 @@ def _build_publish_service(settings, store):
 
 def cmd_publish(args: argparse.Namespace) -> int:
     settings = load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     try:
         service = _build_publish_service(settings, store)
         platforms = (
@@ -176,7 +178,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
 
 def cmd_publish_due(args: argparse.Namespace) -> int:
     settings = load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     try:
         service = _build_publish_service(settings, store)
         reports = service.publish_due()
@@ -192,7 +194,7 @@ def cmd_publish_due(args: argparse.Namespace) -> int:
 
 def cmd_list_scheduled(args: argparse.Namespace) -> int:
     settings = load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     try:
         posts = store.get_posts_due_for_posting(args.before if hasattr(args, 'before') and args.before else None)
         if not posts:
@@ -212,7 +214,7 @@ def cmd_list_scheduled(args: argparse.Namespace) -> int:
 
 def cmd_bot(args: argparse.Namespace) -> int:
     settings = load_settings()
-    store = Store(settings.db_path)
+    store = build_store(settings)
     try:
         approval = build_approval(settings, store, build_sync(settings))
         print("gelio bot running — long-polling Telegram. Ctrl-C to stop.")
@@ -258,6 +260,76 @@ def cmd_test_image(args: argparse.Namespace) -> int:
             "not a real photo. Check CLOUDFLARE_*/TOGETHER_* keys and quota."
         )
         return 1
+    return 0
+
+
+def cmd_set_webhook(args: argparse.Namespace) -> int:
+    """Register the Telegram webhook at <base_url>/telegram/<secret>."""
+    from gelio.approval import TelegramClient
+
+    settings = load_settings()
+    if not settings.telegram_webhook_secret:
+        print("ERROR: set TELEGRAM_WEBHOOK_SECRET first", file=sys.stderr)
+        return 1
+    secret = settings.telegram_webhook_secret
+    base = args.base_url.rstrip("/")
+    url = f"{base}/telegram/{secret}"
+    client = TelegramClient(settings.telegram_bot_token)
+    client.set_webhook(url, secret)
+    # Print the URL with the secret masked so logs/terminals don't leak it.
+    print(f"Webhook set → {base}/telegram/***")
+    return 0
+
+
+def cmd_delete_webhook(args: argparse.Namespace) -> int:
+    from gelio.approval import TelegramClient
+
+    settings = load_settings()
+    client = TelegramClient(settings.telegram_bot_token)
+    client.delete_webhook(drop_pending=args.drop_pending)
+    print("Webhook deleted (long-poll `bot` can run again).")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from gelio.doctor import doctor
+
+    settings = load_settings()
+    return doctor(settings, probe=not args.no_probe)
+
+
+def cmd_migrate_state(args: argparse.Namespace) -> int:
+    """One-time copy of local SQLite rows into Supabase (authoritative state)."""
+    from gelio.store import SqliteStore
+    from gelio.supabase_store import SupabaseStore
+
+    settings = load_settings()
+    if not settings.supabase_url or not settings.supabase_service_key:
+        print("ERROR: set SUPABASE_URL and SUPABASE_SERVICE_KEY first", file=sys.stderr)
+        return 1
+
+    src = SqliteStore(settings.db_path)
+    try:
+        rows = src.all_posts()
+    finally:
+        src.close()
+    if not rows:
+        print("No local posts to migrate.")
+        return 0
+
+    dst = SupabaseStore.from_settings(settings)
+    migrated = 0
+    for record in rows:
+        if args.dry_run:
+            print(f"  would migrate {record.id} ({record.state.value})")
+            continue
+        dst.upsert_record(record)
+        migrated += 1
+        print(f"  migrated {record.id} ({record.state.value})")
+    if args.dry_run:
+        print(f"DRY RUN: {len(rows)} post(s) to migrate.")
+    else:
+        print(f"{migrated} post(s) migrated to Supabase.")
     return 0
 
 
@@ -327,6 +399,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt", default=None, help="override the default test prompt"
     )
     timg.set_defaults(func=cmd_test_image)
+
+    setweb = sub.add_parser(
+        "set-webhook", help="register the Telegram webhook at <base_url>/telegram/<secret>"
+    )
+    setweb.add_argument("base_url", help="public HTTPS base, e.g. https://gelio.vercel.app/api/telegram")
+    setweb.set_defaults(func=cmd_set_webhook)
+
+    delweb = sub.add_parser("delete-webhook", help="remove the Telegram webhook (re-enable long-poll)")
+    delweb.add_argument(
+        "--drop-pending", action="store_true", help="discard queued updates on delete"
+    )
+    delweb.set_defaults(func=cmd_delete_webhook)
+
+    doc = sub.add_parser(
+        "doctor", help="preflight health check for unattended/CI runs (non-zero exit on FAIL)"
+    )
+    doc.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="skip the live Supabase connectivity probe (offline/CI-safe)",
+    )
+    doc.set_defaults(func=cmd_doctor)
+
+    mig = sub.add_parser(
+        "migrate-state", help="one-time copy of local SQLite posts into Supabase"
+    )
+    mig.add_argument(
+        "--dry-run", action="store_true", help="list what would migrate without writing"
+    )
+    mig.set_defaults(func=cmd_migrate_state)
 
     setup = sub.add_parser(
         "setup-assets", help="download brand fonts + install Playwright Chromium"

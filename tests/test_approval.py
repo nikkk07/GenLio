@@ -203,6 +203,18 @@ def test_send_preview_transitions_and_buttons(env):
     assert any(rm and "inline_keyboard" in rm for _, rm, _ in tg.messages)
 
 
+def test_send_preview_degraded_warns_admin(env):
+    settings, store, tg, svc, _ = env
+    _seed(store, settings, "2026-06-11-alpha", "Alpha", "2026-06-11", PostState.DRAFTED)
+    svc.send_preview("2026-06-11-alpha", degraded=True)
+
+    # The action prompt carries a visible DEGRADED warning, and the post still
+    # only reaches AWAITING_APPROVAL — it never auto-publishes.
+    action_msgs = [t for t, rm, _ in tg.messages if rm and "inline_keyboard" in rm]
+    assert action_msgs and "DEGRADED" in action_msgs[0]
+    assert store.get_post("2026-06-11-alpha").state is PostState.AWAITING_APPROVAL
+
+
 def test_send_preview_media_group_chunking(env):
     settings, store, tg, svc, _ = env
     _seed(store, settings, "2026-06-11-big", "Big", "2026-06-11", PostState.DRAFTED, n_files=12)

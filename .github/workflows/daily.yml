@@ -1,0 +1,82 @@
+name: gelio daily
+
+# Free daily cron. 09:00 IST = 03:30 UTC (IST = UTC+5:30), so 30 3 * * *.
+# Also runnable on demand from the Actions tab (workflow_dispatch).
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Smoke test only (generate --dry-run, no write/publish)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: gelio-daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Supabase is the authoritative shared state (the runner is ephemeral and
+      # the approval tap lands later on the webhook function).
+      GELIO_STATE: supabase
+      # All secrets come from GitHub Actions secrets — never committed.
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      # X (Twitter) publisher — OAuth 1.0a user context.
+      X_CONSUMER_KEY: ${{ secrets.X_CONSUMER_KEY }}
+      X_CONSUMER_SECRET: ${{ secrets.X_CONSUMER_SECRET }}
+      X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+      X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+      # Optional Instagram Graph API publisher.
+      IG_USER_ID: ${{ secrets.IG_USER_ID }}
+      IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+      # Optional premium image provider.
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Chromium + brand fonts
+        run: python run.py setup-assets --with-deps
+
+      - name: Doctor (preflight; fails the run on a missing requirement)
+        run: python run.py doctor
+
+      - name: Smoke test (dry run only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: python run.py generate --render --dry-run
+
+      - name: Generate, render, and send for approval
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: python run.py generate --render --approve
+
+      - name: Publish any posts whose schedule is due (idempotent)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: python run.py publish-due

@@ -25,7 +25,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from config.settings import Settings
 from gelio.schemas import Content, PostState
-from gelio.store import StateTransitionError, Store
+from gelio.store import StateStore, StateTransitionError
 from gelio.sync import SupabaseSync
 
 logger = logging.getLogger("gelio.approval")
@@ -275,6 +275,19 @@ class TelegramClient:
             payload["offset"] = offset
         return self._post("getUpdates", payload) or []
 
+    def set_webhook(self, url: str, secret_token: str) -> Any:
+        return self._post(
+            "setWebhook",
+            {
+                "url": url,
+                "secret_token": secret_token,
+                "allowed_updates": ["message", "callback_query"],
+            },
+        )
+
+    def delete_webhook(self, drop_pending: bool = False) -> Any:
+        return self._post("deleteWebhook", {"drop_pending_updates": drop_pending})
+
 
 # --------------------------------------------------------------------------- #
 # Approval service
@@ -289,7 +302,7 @@ class ApprovalService:
     def __init__(
         self,
         telegram: TelegramAPI,
-        store: Store,
+        store: StateStore,
         settings: Settings,
         sync: SupabaseSync,
         regen_runner: RegenRunner,
@@ -321,8 +334,14 @@ class ApprovalService:
                 logger.warning("broadcast to admin %s failed: %s", admin, exc)
 
     # -- preview -------------------------------------------------------------
-    def send_preview(self, post_id: str) -> None:
-        """Send album + captions + action buttons to ALL admin chats and move to AWAITING_APPROVAL."""
+    def send_preview(self, post_id: str, *, degraded: bool = False) -> None:
+        """Send album + captions + action buttons to ALL admin chats and move to AWAITING_APPROVAL.
+
+        ``degraded`` prepends a visible warning to the action prompt: the render
+        fell back to gradients for too many slides. Nothing auto-publishes — the
+        post still waits behind the approval gate — but the admin is told so they
+        can Reject/Regenerate instead of approving low-quality visuals.
+        """
         record = self._store.get_post(post_id)
         if record is None:
             raise ApprovalError(f"unknown post id {post_id!r}")
@@ -336,6 +355,13 @@ class ApprovalService:
             brief.get("concept", record.concept), brief.get("hook", ""), content
         )
         fits = len(caption_text) <= CAPTION_LIMIT
+        action_prompt = "Choose an action for this post:"
+        if degraded:
+            action_prompt = (
+                "⚠️ DEGRADED: too many slides fell back to the gradient (check image "
+                "provider keys/quota). Reject or Regenerate unless this is acceptable.\n\n"
+                + action_prompt
+            )
 
         # Broadcast to ALL admin chat IDs
         for admin_chat_id in self._admin_chat_ids:
@@ -350,7 +376,7 @@ class ApprovalService:
 
                 self._tg.send_message(
                     admin_chat_id,
-                    "Choose an action for this post:",
+                    action_prompt,
                     reply_markup=action_keyboard(post_id),
                 )
                 logger.info("preview sent to chat=%s id=%s", admin_chat_id, post_id)
@@ -716,7 +742,7 @@ class ApprovalService:
         return json.loads(path.read_text(encoding="utf-8"))
 
 
-def build_approval(settings: Settings, store: Store, sync: SupabaseSync) -> ApprovalService:
+def build_approval(settings: Settings, store: StateStore, sync: SupabaseSync) -> ApprovalService:
     """Construct an ApprovalService with lazily-built regen + publish runners.
 
     The regen runner builds a full pipeline (LLM + render) only when a

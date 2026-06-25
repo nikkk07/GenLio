@@ -39,7 +39,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from config.settings import Settings
 from gelio.redact import redact
 from gelio.schemas import Content, PostRecord, PostState
-from gelio.store import StateTransitionError, Store
+from gelio.store import StateStore, StateTransitionError
 from gelio.sync import SupabaseSync
 
 logger = logging.getLogger("gelio.publisher")
@@ -478,7 +478,7 @@ class PublishService:
 
     def __init__(
         self,
-        store: Store,
+        store: StateStore,
         settings: Settings,
         sync: SupabaseSync,
         publishers: dict[str, Publisher],
@@ -652,7 +652,7 @@ def _column_key(platform: str) -> str:
 
 def build_publish_service(
     settings: Settings,
-    store: Store,
+    store: StateStore,
     sync: SupabaseSync,
     telegram: Any | None = None,
 ) -> PublishService:

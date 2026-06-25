@@ -1,4 +1,4 @@
-# gelio — AI content agent (Phases 1–4)
+# gelio — AI content agent (Phases 1–5)
 
 `gelio` is a production-grade, **free-tier-only** AI content agent for the
 aviation training academy **We One Aviation**. Each run maps a psychology
@@ -10,7 +10,10 @@ artifacts**.
 The full pipeline: content (Phase 1) → branded slide visuals + PDF (Phase 2)
 → Telegram approval with multi-admin buttons and IST scheduling (Phase 3) →
 publishing to X and Instagram automatically, plus a semi-manual LinkedIn PDF
-hand-off (Phase 4).
+hand-off (Phase 4) → a **$0 always-on deployment** on GitHub Actions cron +
+a serverless Telegram webhook + Supabase-authoritative shared state (Phase 5).
+
+See the **[Phase 5 go-live runbook](#phase-5--0-go-live-runbook)** to deploy.
 
 ---
 
@@ -440,3 +443,100 @@ simply stops skipping Instagram.
 > Phase 4 — it adds the `scheduled_time` / `x_post_id` / `ig_media_id` /
 > `handled_by` columns (the `alter table … if not exists` block is safe on
 > existing projects).
+
+---
+
+## Phase 5 — $0 go-live runbook
+
+Phase 5 makes gelio run **unattended at zero cost** with no always-on server:
+
+- **GitHub Actions cron** (`.github/workflows/daily.yml`) runs the daily
+  `generate --render --approve` then `publish-due` at 09:00 IST (03:30 UTC).
+- **A Telegram webhook** on a free serverless function (`api/telegram.py`,
+  Vercel) receives the admin's approval tap minutes/hours later and routes it to
+  the *same* approval handlers — Approve-with-no-schedule publishes inline.
+- **Supabase is the authoritative shared state** (`GELIO_STATE=supabase`). The
+  Actions runner is ephemeral and the webhook is a separate process, so local
+  SQLite can't bridge them; every read/write goes to Supabase via PostgREST.
+
+### Architecture
+
+```
+                 ┌──────────────── GitHub Actions (cron, free) ───────────────┐
+                 │  doctor → generate --render --approve → publish-due         │
+                 └───────────────┬───────────────────────────────┬────────────┘
+                                 │ writes state                   │ publishes due
+                                 ▼                                ▼
+   Telegram  ──tap──►  Vercel webhook (api/telegram.py)  ──►  Supabase (posts,
+   admin     ◄─DM──    /telegram/<secret> + header secret      used_concepts)
+                       routes to ApprovalService.handle_update   ▲   authoritative
+                       Approve→publish inline ───────────────────┘   shared state
+```
+
+### State backends
+
+`store.py` exposes a `StateStore` interface with two backends, selected by
+`GELIO_STATE`:
+
+| `GELIO_STATE` | Backend | Use |
+|---------------|---------|-----|
+| `sqlite` (default) | `SqliteStore` — local file | local dev |
+| `supabase` | `SupabaseStore` — PostgREST over httpx | production (CI + webhook) |
+
+Both enforce the **identical** state machine (`check_transition`), concept
+dedup, scheduling, and completion semantics — proven by a parity test suite run
+against both backends with HTTP mocked (`tests/test_supabase_store.py`).
+
+### New commands
+
+```bash
+python run.py doctor                 # preflight; non-zero exit on a missing requirement
+python run.py doctor --no-probe      # skip the live Supabase connectivity probe
+python run.py migrate-state          # one-time copy of local SQLite posts → Supabase
+python run.py migrate-state --dry-run
+python run.py set-webhook https://<app>.vercel.app/api/telegram   # register webhook
+python run.py delete-webhook         # remove webhook (re-enable long-poll `bot`)
+GELIO_STATE=supabase python run.py generate --render --dry-run     # CI smoke (no write/post)
+```
+
+### 🚀 GO-LIVE CHECKLIST (your manual steps)
+
+1. **Rotate the Telegram bot token.** The old token sat in a committed
+   `bot.log` on a public repo (now purged from history). In **@BotFather** →
+   `/revoke` → copy the new token. Use it everywhere below.
+2. **Apply the Supabase schema + bucket.** In the Supabase SQL editor run
+   `supabase/schema.sql` (idempotent: creates `posts` with all state columns +
+   the `used_concepts` dedup table). Then **Storage → New bucket → `slides`
+   (Public)**.
+3. **Add GitHub Actions secrets.** Repo → Settings → Secrets and variables →
+   Actions → *New repository secret* for each (NOT committed):
+   - **Required:** `GROQ_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`,
+     `CLOUDFLARE_API_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`
+     (comma-separated for multiple admins), `TELEGRAM_WEBHOOK_SECRET`,
+     `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `X_CONSUMER_KEY`,
+     `X_CONSUMER_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`.
+   - **Optional:** `IG_USER_ID`, `IG_ACCESS_TOKEN`, `TOGETHER_API_KEY`.
+   - `GELIO_STATE=supabase` is already set in the workflow — no secret needed.
+4. **Deploy the webhook to Vercel.** Import the repo (Vercel auto-detects
+   `api/telegram.py`). Add the **same** env vars in Vercel → Settings →
+   Environment Variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,
+   `TELEGRAM_WEBHOOK_SECRET`, `GELIO_STATE=supabase`, `SUPABASE_URL`,
+   `SUPABASE_SERVICE_KEY`, and the `X_*` / `IG_*` publish keys. Deploy; note the
+   base URL, e.g. `https://gelio.vercel.app/api/telegram`.
+5. **Register the webhook.** Locally (with `TELEGRAM_BOT_TOKEN` +
+   `TELEGRAM_WEBHOOK_SECRET` in `.env`):
+   `python run.py set-webhook https://gelio.vercel.app/api/telegram`.
+   Verify `GET …/api/telegram/health` returns `{"ok":true,"configured":true}`.
+6. **Migrate existing state once** (only if you have local posts to keep):
+   `GELIO_STATE=supabase python run.py migrate-state`.
+7. **Enable + test the workflow.** Actions tab → enable workflows → run **gelio
+   daily** via *Run workflow* with **dry_run = true** first (smoke test, writes
+   nothing), then a real `workflow_dispatch`. Confirm the preview lands in
+   Telegram, tap ✅ Approve, and watch the post publish via the webhook. The
+   cron then runs daily at 09:00 IST automatically.
+
+**Safety rails (unattended):** only `APPROVED` posts ever publish; a failed
+generate writes no partial post; `publish-due` is idempotent (re-runs are
+safe); a **DEGRADED** render (too many gradient fallbacks) is flagged in the
+admin DM and never auto-publishes — it waits behind the approval gate; and
+`doctor` fails the CI run loudly before any work if a requirement is missing.
