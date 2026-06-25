@@ -18,7 +18,11 @@ from gelio.approval import ApprovalService, encode_callback
 from gelio.schemas import PostRecord, PostState
 from gelio.store import Store
 from gelio.sync import SupabaseSync
-from gelio.webhook import create_app
+from gelio.webhook import (
+    WebhookConfigError,
+    create_app,
+    require_supabase_state,
+)
 from tests.conftest import BRAND, make_content_dict
 
 SECRET = "s3cret-token"
@@ -88,6 +92,70 @@ def test_missing_header_rejected(spy_client):
     r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"))
     assert r.status_code == 403
     assert spy.updates == []
+
+
+# --------------------------------------------------------------------------- #
+# Serverless config guard: no SQLite on Vercel; health needs no DB
+# --------------------------------------------------------------------------- #
+def _supa_settings(**kw) -> Settings:
+    base = dict(
+        provider="groq", groq_api_key="", groq_model="m", gemini_api_key="", gemini_model="m",
+        brand=BRAND, telegram_bot_token="t", telegram_admin_chat_id=ADMIN,
+        state_backend="supabase", supabase_url="https://x.supabase.co", supabase_service_key="svc",
+    )
+    base.update(kw)
+    return Settings(**base)
+
+
+def test_require_supabase_rejects_sqlite():
+    with pytest.raises(WebhookConfigError, match="GELIO_STATE=supabase"):
+        require_supabase_state(_supa_settings(state_backend="sqlite"))
+
+
+def test_require_supabase_rejects_missing_keys():
+    with pytest.raises(WebhookConfigError, match="SUPABASE_URL"):
+        require_supabase_state(_supa_settings(supabase_url="", supabase_service_key=""))
+
+
+def test_require_supabase_ok():
+    require_supabase_state(_supa_settings())  # no raise
+
+
+def test_health_works_without_db_when_misconfigured():
+    """A misconfigured factory must NOT break /health (no DB touched)."""
+    def _boom():
+        raise WebhookConfigError("Webhook requires GELIO_STATE=supabase + Supabase keys")
+
+    client = TestClient(create_app(_boom, SECRET))
+    assert client.get("/health").status_code == 200
+    # The factory was never called for /health.
+
+
+def test_misconfigured_factory_returns_503():
+    def _boom():
+        raise WebhookConfigError("Webhook requires GELIO_STATE=supabase + Supabase keys")
+
+    client = TestClient(create_app(_boom, SECRET))
+    r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    assert r.status_code == 503
+    assert "GELIO_STATE=supabase" in r.text
+
+
+def test_factory_built_once_and_cached():
+    calls = {"n": 0}
+
+    class _Svc:
+        def handle_update(self, update):
+            pass
+
+    def _factory():
+        calls["n"] += 1
+        return _Svc()
+
+    client = TestClient(create_app(_factory, SECRET))
+    for _ in range(3):
+        client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    assert calls["n"] == 1  # built on first request, cached after
 
 
 def test_handler_error_still_200():

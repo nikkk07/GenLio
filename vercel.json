@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "env": {
+    "GELIO_STATE": "supabase"
+  },
+  "build": {
+    "env": {
+      "GELIO_STATE": "supabase"
+    }
+  }
+}

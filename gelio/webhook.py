@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-from typing import Any
+from typing import Any, Callable, Union
 
 from fastapi import FastAPI, Header, Request, Response
 
@@ -29,6 +29,34 @@ logger = logging.getLogger("gelio.webhook")
 
 _SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
+# create_app accepts either a ready service (tests) or a lazy factory (prod, so
+# a misconfigured deploy fails per-request instead of crashing app import).
+ApprovalProvider = Union[ApprovalService, Callable[[], ApprovalService]]
+
+
+class WebhookConfigError(RuntimeError):
+    """Raised when the serverless webhook is misconfigured (e.g. not Supabase)."""
+
+
+def require_supabase_state(settings) -> None:
+    """The serverless webhook has no writable disk, so SQLite can't work.
+
+    Demand ``GELIO_STATE=supabase`` plus Supabase credentials and raise a clear,
+    actionable error otherwise — instead of letting ``build_store`` try to open
+    a local DB file and crash with ``unable to open database file``.
+    """
+    if settings.state_backend != "supabase":
+        raise WebhookConfigError(
+            "Webhook requires GELIO_STATE=supabase + Supabase keys "
+            f"(got GELIO_STATE={settings.state_backend!r}). Serverless functions "
+            "have no writable disk, so the SQLite backend cannot be used."
+        )
+    if not settings.supabase_url or not settings.supabase_service_key:
+        raise WebhookConfigError(
+            "Webhook requires GELIO_STATE=supabase + Supabase keys "
+            "(SUPABASE_URL and SUPABASE_SERVICE_KEY must be set)."
+        )
+
 
 def _valid(provided: str | None, expected: str) -> bool:
     """Constant-time secret comparison (never True for an empty expected)."""
@@ -37,16 +65,30 @@ def _valid(provided: str | None, expected: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
-def create_app(approval: ApprovalService, secret: str) -> FastAPI:
-    """Build the webhook app around an already-constructed approval service.
+def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
+    """Build the webhook app around an approval service or a lazy factory.
 
-    Kept separate from :func:`build_app` so tests can inject a fake approval
-    service and exercise routing + secret validation without any network.
+    ``approval`` may be a ready :class:`ApprovalService` (tests inject a fake) or
+    a zero-arg factory (production). The factory is called on the FIRST webhook
+    request and cached — never at app import — so ``/health`` stays available
+    even when the deploy is misconfigured (no store is touched until a real
+    update arrives). A :class:`WebhookConfigError` from the factory becomes a
+    clear ``503`` instead of a crashed import.
     """
     app = FastAPI(title="gelio telegram webhook", docs_url=None, redoc_url=None)
+    _cache: dict[str, ApprovalService] = {}
+
+    def _get_approval() -> ApprovalService:
+        svc = _cache.get("svc")
+        if svc is None:
+            svc = approval() if callable(approval) else approval
+            _cache["svc"] = svc
+        return svc
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        # Deliberately does NOT build the store/approval service — a health
+        # check must work even if state is misconfigured.
         return {"ok": True, "configured": bool(secret)}
 
     @app.post("/telegram/{path_secret}")
@@ -61,11 +103,21 @@ def create_app(approval: ApprovalService, secret: str) -> FastAPI:
             logger.warning("rejected webhook call: bad secret")
             return Response(status_code=403, content="forbidden")
 
+        try:
+            approval_svc = _get_approval()
+        except WebhookConfigError as exc:
+            # Misconfigured deploy (e.g. SQLite on serverless): surface a clear
+            # 503 so the operator sees the cause; Telegram will retry once fixed.
+            logger.error("webhook misconfigured: %s", exc)
+            return Response(
+                status_code=503, content=str(exc), media_type="text/plain"
+            )
+
         update = await request.json()
         try:
             # Same handler as long-poll: admin check, approve→publish-inline,
             # reject, regenerate, schedule — all reused, not reimplemented.
-            approval.handle_update(update)
+            approval_svc.handle_update(update)
         except Exception as exc:  # noqa: BLE001 - never 500 (avoids Telegram retry storms)
             logger.error("error handling webhook update: %s", exc)
         # Always 200 fast so Telegram marks the update delivered.
@@ -77,16 +129,25 @@ def create_app(approval: ApprovalService, secret: str) -> FastAPI:
 def build_app() -> FastAPI:
     """Wire the production approval service from environment settings.
 
-    Imported by the serverless entrypoint (``api/telegram.py``). Reads the
-    Telegram token, Supabase keys, and publish keys from the host environment.
+    Imported by the serverless entrypoint (``api/telegram.py``). The approval
+    service (and therefore the Supabase store) is built lazily on the first
+    update, so importing this module never opens a DB — ``/health`` works even
+    when state is misconfigured, and a non-Supabase deploy fails with a clear
+    :class:`WebhookConfigError` (503) rather than an ``unable to open database
+    file`` crash.
     """
     from config.settings import load_settings
-    from gelio.approval import build_approval
-    from gelio.store import build_store
-    from gelio.sync import build_sync
 
     settings = load_settings()
-    store = build_store(settings)
-    sync = build_sync(settings)
-    approval = build_approval(settings, store, sync)
-    return create_app(approval, settings.telegram_webhook_secret)
+
+    def _factory() -> ApprovalService:
+        from gelio.approval import build_approval
+        from gelio.store import build_store
+        from gelio.sync import build_sync
+
+        require_supabase_state(settings)  # serverless has no writable disk
+        store = build_store(settings)
+        sync = build_sync(settings)
+        return build_approval(settings, store, sync)
+
+    return create_app(_factory, settings.telegram_webhook_secret)
