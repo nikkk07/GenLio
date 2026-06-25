@@ -15,8 +15,12 @@ Environment:
     SUPABASE_URL, SUPABASE_SERVICE_KEY, and any X_*/IG_* publish keys.
 
 Routes (relative to your deployment base URL):
-    GET  /api/telegram/health
-    POST /api/telegram/telegram/<secret>   ← register this with setWebhook
+    GET  /api/telegram/health          ← non-secret readiness summary
+    POST /api/telegram/<secret>        ← register this with setWebhook
+
+``/health`` returns booleans/counts only (no secret values), e.g.
+``{"ok":true,"configured":true,"webhook_secret_set":true,"state_backend":
+"supabase","supabase_configured":true,"bot_token_set":true,"admins":3}``.
 
 Supabase Edge Function alternative: an Edge Function (Deno) can forward the
 same JSON body to a tiny FastAPI deployment, or you can port `create_app`'s

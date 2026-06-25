@@ -21,6 +21,7 @@ from gelio.sync import SupabaseSync
 from gelio.webhook import (
     WebhookConfigError,
     create_app,
+    readiness_summary,
     require_supabase_state,
 )
 from tests.conftest import BRAND, make_content_dict
@@ -119,6 +120,66 @@ def test_require_supabase_rejects_missing_keys():
 
 def test_require_supabase_ok():
     require_supabase_state(_supa_settings())  # no raise
+
+
+# --------------------------------------------------------------------------- #
+# Health readiness summary (booleans/counts only — never secret values)
+# --------------------------------------------------------------------------- #
+def test_readiness_summary_fields():
+    s = _supa_settings(telegram_admin_chat_id="111,222,333", telegram_webhook_secret="wh")
+    summary = readiness_summary(s)
+    assert summary == {
+        "state_backend": "supabase",
+        "supabase_configured": True,
+        "bot_token_set": True,
+        "admins": 3,
+        "webhook_secret_set": True,
+    }
+
+
+def test_readiness_summary_unconfigured():
+    s = _supa_settings(
+        state_backend="sqlite", supabase_url="", supabase_service_key="",
+        telegram_bot_token="", telegram_admin_chat_id="", telegram_webhook_secret="",
+    )
+    summary = readiness_summary(s)
+    assert summary == {
+        "state_backend": "sqlite",
+        "supabase_configured": False,
+        "bot_token_set": False,
+        "admins": 0,
+        "webhook_secret_set": False,
+    }
+
+
+def test_readiness_summary_has_no_secret_values():
+    s = _supa_settings(
+        supabase_url="https://secret.supabase.co", supabase_service_key="SUPER_SECRET_KEY",
+        telegram_bot_token="123:SECRET_TOKEN", telegram_webhook_secret="WH_SECRET",
+    )
+    summary = readiness_summary(s)
+    blob = repr(summary)
+    for secret in ("SUPER_SECRET_KEY", "SECRET_TOKEN", "WH_SECRET", "secret.supabase.co"):
+        assert secret not in blob
+    # Every value is a bool, int, or the (non-secret) backend name.
+    for k, v in summary.items():
+        assert isinstance(v, (bool, int)) or k == "state_backend"
+
+
+def test_health_endpoint_includes_readiness():
+    spy = _SpyApproval()
+    readiness = {
+        "state_backend": "supabase", "supabase_configured": True,
+        "bot_token_set": True, "admins": 2, "webhook_secret_set": True,
+    }
+    client = TestClient(create_app(spy, SECRET, readiness=readiness))
+    body = client.get("/api/telegram/health").json()
+    assert body["ok"] is True
+    assert body["state_backend"] == "supabase"
+    assert body["supabase_configured"] is True
+    assert body["bot_token_set"] is True
+    assert body["admins"] == 2
+    assert body["webhook_secret_set"] is True
 
 
 def test_health_works_without_db_when_misconfigured():

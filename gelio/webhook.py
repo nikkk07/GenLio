@@ -63,6 +63,26 @@ def require_supabase_state(settings) -> None:
         )
 
 
+def readiness_summary(settings) -> dict[str, Any]:
+    """A NON-SECRET readiness summary for the health endpoint.
+
+    Reports only booleans + a count — never any secret value — so a single
+    health check confirms the whole deploy is configured:
+      * ``state_backend``       — "sqlite" | "supabase" (the value, not a secret)
+      * ``supabase_configured`` — SUPABASE_URL and SUPABASE_SERVICE_KEY both set
+      * ``bot_token_set``       — TELEGRAM_BOT_TOKEN set
+      * ``admins``              — number of TELEGRAM_ADMIN_CHAT_ID entries
+      * ``webhook_secret_set``  — TELEGRAM_WEBHOOK_SECRET set
+    """
+    return {
+        "state_backend": settings.state_backend,
+        "supabase_configured": bool(settings.supabase_url and settings.supabase_service_key),
+        "bot_token_set": bool(settings.telegram_bot_token),
+        "admins": len(settings.telegram_admin_chat_ids),
+        "webhook_secret_set": bool(settings.telegram_webhook_secret),
+    }
+
+
 def _valid(provided: str | None, expected: str) -> bool:
     """Constant-time secret comparison (never True for an empty expected)."""
     if not expected or not provided:
@@ -82,7 +102,11 @@ VERCEL_PREFIX = "/api/telegram"
 _ROUTE_PREFIXES = ("", VERCEL_PREFIX)
 
 
-def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
+def create_app(
+    approval: ApprovalProvider,
+    secret: str,
+    readiness: dict[str, Any] | None = None,
+) -> FastAPI:
     """Build the webhook app around an approval service or a lazy factory.
 
     ``approval`` may be a ready :class:`ApprovalService` (tests inject a fake) or
@@ -108,8 +132,16 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
 
     def health() -> dict[str, Any]:
         # Deliberately does NOT build the store/approval service — a health
-        # check must work even if state is misconfigured.
-        return {"ok": True, "configured": bool(secret)}
+        # check must work even if state is misconfigured. Reports only
+        # booleans/counts from readiness_summary(), never any secret value.
+        summary: dict[str, Any] = {
+            "ok": True,
+            "configured": bool(secret),
+            "webhook_secret_set": bool(secret),
+        }
+        if readiness:
+            summary.update(readiness)
+        return summary
 
     async def telegram(
         path_secret: str,
@@ -187,4 +219,6 @@ def build_app() -> FastAPI:
         sync = build_sync(settings)
         return build_approval(settings, store, sync)
 
-    return create_app(_factory, settings.telegram_webhook_secret)
+    return create_app(
+        _factory, settings.telegram_webhook_secret, readiness=readiness_summary(settings)
+    )
