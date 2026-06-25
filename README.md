@@ -468,7 +468,7 @@ Phase 5 makes gelio run **unattended at zero cost** with no always-on server:
                                  │ writes state                   │ publishes due
                                  ▼                                ▼
    Telegram  ──tap──►  Vercel webhook (api/telegram.py)  ──►  Supabase (posts,
-   admin     ◄─DM──    /telegram/<secret> + header secret      used_concepts)
+   admin     ◄─DM──    /api/telegram/<secret> + header        used_concepts)
                        routes to ApprovalService.handle_update   ▲   authoritative
                        Approve→publish inline ───────────────────┘   shared state
 ```
@@ -518,15 +518,19 @@ GELIO_STATE=supabase python run.py generate --render --dry-run     # CI smoke (n
    - **Optional:** `IG_USER_ID`, `IG_ACCESS_TOKEN`, `TOGETHER_API_KEY`.
    - `GELIO_STATE=supabase` is already set in the workflow — no secret needed.
 4. **Deploy the webhook to Vercel.** Import the repo (Vercel auto-detects
-   `api/telegram.py`). Add the **same** env vars in Vercel → Settings →
-   Environment Variables: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,
-   `TELEGRAM_WEBHOOK_SECRET`, `GELIO_STATE=supabase`, `SUPABASE_URL`,
-   `SUPABASE_SERVICE_KEY`, and the `X_*` / `IG_*` publish keys. Deploy; note the
-   base URL, e.g. `https://gelio.vercel.app/api/telegram`.
+   `api/telegram.py`; `vercel.json` sets `GELIO_STATE=supabase`). Add the secret
+   env vars in Vercel → Settings → Environment Variables: `TELEGRAM_BOT_TOKEN`,
+   `TELEGRAM_ADMIN_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`, `SUPABASE_URL`,
+   `SUPABASE_SERVICE_KEY`, and the `X_*` / `IG_*` publish keys. Deploy; the
+   function base URL is `https://<app>.vercel.app/api/telegram`.
+   - **Health check:** `GET https://<app>.vercel.app/api/telegram/health` →
+     `{"ok":true,"configured":true}`.
 5. **Register the webhook.** Locally (with `TELEGRAM_BOT_TOKEN` +
-   `TELEGRAM_WEBHOOK_SECRET` in `.env`):
-   `python run.py set-webhook https://gelio.vercel.app/api/telegram`.
-   Verify `GET …/api/telegram/health` returns `{"ok":true,"configured":true}`.
+   `TELEGRAM_WEBHOOK_SECRET` in `.env`), pass the **function base** (the secret
+   is appended automatically):
+   `python run.py set-webhook https://<app>.vercel.app/api/telegram`.
+   Telegram will then POST to `https://<app>.vercel.app/api/telegram/<secret>`
+   (no doubled `/telegram/` segment).
 6. **Migrate existing state once** (only if you have local posts to keep):
    `GELIO_STATE=supabase python run.py migrate-state`.
 7. **Enable + test the workflow.** Actions tab → enable workflows → run **gelio

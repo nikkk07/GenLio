@@ -7,12 +7,16 @@ serverless function (Vercel / Supabase Edge) that hosts this FastAPI app, which
 routes the update to the *same* :class:`~gelio.approval.ApprovalService` the
 long-poll bot uses — no forked logic.
 
-Security: the endpoint path embeds a secret (``/telegram/{secret}``) AND
+Security: the endpoint path embeds a secret (``…/api/telegram/<secret>``) AND
 Telegram echoes a configured secret in the ``X-Telegram-Bot-Api-Secret-Token``
 header (set via ``setWebhook``). Both must match the configured
 ``TELEGRAM_WEBHOOK_SECRET`` or the request is rejected, so a leaked URL alone
 can't drive the bot. Admin filtering is unchanged — it happens inside
 ``handle_update`` exactly as in long-poll mode.
+
+Public URLs on Vercel (base ``https://<app>.vercel.app``):
+  * health:  ``GET  /api/telegram/health``
+  * webhook: ``POST /api/telegram/<secret>``  ← register this with setWebhook
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import hmac
 import logging
 from typing import Any, Callable, Union
 
-from fastapi import FastAPI, Header, Request, Response
+from fastapi import APIRouter, FastAPI, Header, Request, Response
 
 from gelio.approval import ApprovalService
 
@@ -65,6 +69,17 @@ def _valid(provided: str | None, expected: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
+# Vercel mounts a file at ``api/telegram.py`` under the URL prefix
+# ``/api/telegram`` and passes the FULL path to the ASGI app. So a request to
+# ``/api/telegram/health`` arrives as ``/api/telegram/health`` — routes defined
+# only at ``/health`` would 404. We mount the router at BOTH the root and this
+# prefix, so the same app works locally (``/health``), in tests, AND on Vercel
+# (``/api/telegram/health``) regardless of whether the platform strips the
+# prefix. The webhook itself is ``/{secret}`` (NOT ``/telegram/{secret}``) so
+# the public URL is ``/api/telegram/<secret>`` with no doubled segment.
+VERCEL_PREFIX = "/api/telegram"
+
+
 def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
     """Build the webhook app around an approval service or a lazy factory.
 
@@ -74,8 +89,13 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
     even when the deploy is misconfigured (no store is touched until a real
     update arrives). A :class:`WebhookConfigError` from the factory becomes a
     clear ``503`` instead of a crashed import.
+
+    Routes are exposed at both the root and the ``/api/telegram`` Vercel mount:
+      * ``GET  /health``            and ``GET  /api/telegram/health``
+      * ``POST /{secret}``          and ``POST /api/telegram/{secret}``
     """
     app = FastAPI(title="gelio telegram webhook", docs_url=None, redoc_url=None)
+    router = APIRouter()
     _cache: dict[str, ApprovalService] = {}
 
     def _get_approval() -> ApprovalService:
@@ -85,13 +105,13 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
             _cache["svc"] = svc
         return svc
 
-    @app.get("/health")
+    @router.get("/health")
     def health() -> dict[str, Any]:
         # Deliberately does NOT build the store/approval service — a health
         # check must work even if state is misconfigured.
         return {"ok": True, "configured": bool(secret)}
 
-    @app.post("/telegram/{path_secret}")
+    @router.post("/{path_secret}")
     async def telegram(
         path_secret: str,
         request: Request,
@@ -123,6 +143,8 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
         # Always 200 fast so Telegram marks the update delivered.
         return Response(status_code=200, content='{"ok":true}', media_type="application/json")
 
+    app.include_router(router)  # local/tests: /health, /{secret}
+    app.include_router(router, prefix=VERCEL_PREFIX)  # Vercel: /api/telegram/...
     return app
 
 

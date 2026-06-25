@@ -264,7 +264,13 @@ def cmd_test_image(args: argparse.Namespace) -> int:
 
 
 def cmd_set_webhook(args: argparse.Namespace) -> int:
-    """Register the Telegram webhook at <base_url>/telegram/<secret>."""
+    """Register the Telegram webhook at <base_url>/<secret>.
+
+    ``base_url`` is the Vercel function base (e.g.
+    https://gelio.vercel.app/api/telegram); the secret is appended directly, so
+    the public webhook URL is https://gelio.vercel.app/api/telegram/<secret>
+    (no doubled /telegram/ segment).
+    """
     from gelio.approval import TelegramClient
 
     settings = load_settings()
@@ -273,11 +279,12 @@ def cmd_set_webhook(args: argparse.Namespace) -> int:
         return 1
     secret = settings.telegram_webhook_secret
     base = args.base_url.rstrip("/")
-    url = f"{base}/telegram/{secret}"
+    url = f"{base}/{secret}"
     client = TelegramClient(settings.telegram_bot_token)
     client.set_webhook(url, secret)
     # Print the URL with the secret masked so logs/terminals don't leak it.
-    print(f"Webhook set → {base}/telegram/***")
+    print(f"Webhook set → {base}/***")
+    print(f"  health: {base}/health")
     return 0
 
 
@@ -401,9 +408,13 @@ def build_parser() -> argparse.ArgumentParser:
     timg.set_defaults(func=cmd_test_image)
 
     setweb = sub.add_parser(
-        "set-webhook", help="register the Telegram webhook at <base_url>/telegram/<secret>"
+        "set-webhook", help="register the Telegram webhook at <base_url>/<secret>"
     )
-    setweb.add_argument("base_url", help="public HTTPS base, e.g. https://gelio.vercel.app/api/telegram")
+    setweb.add_argument(
+        "base_url",
+        help="Vercel function base, e.g. https://gelio.vercel.app/api/telegram "
+        "(the secret is appended → /api/telegram/<secret>)",
+    )
     setweb.set_defaults(func=cmd_set_webhook)
 
     delweb = sub.add_parser("delete-webhook", help="remove the Telegram webhook (re-enable long-poll)")

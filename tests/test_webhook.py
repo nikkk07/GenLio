@@ -68,28 +68,28 @@ def test_health(spy_client):
 
 def test_valid_secret_routes(spy_client):
     spy, client = spy_client
-    r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    r = client.post(f"/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
     assert r.status_code == 200
     assert len(spy.updates) == 1
 
 
 def test_bad_path_secret_rejected(spy_client):
     spy, client = spy_client
-    r = client.post("/telegram/wrong", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    r = client.post("/wrong", json=_cb("approve", "p1"), headers={HEADER: SECRET})
     assert r.status_code == 403
     assert spy.updates == []
 
 
 def test_bad_header_secret_rejected(spy_client):
     spy, client = spy_client
-    r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: "nope"})
+    r = client.post(f"/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: "nope"})
     assert r.status_code == 403
     assert spy.updates == []
 
 
 def test_missing_header_rejected(spy_client):
     spy, client = spy_client
-    r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"))
+    r = client.post(f"/{SECRET}", json=_cb("approve", "p1"))
     assert r.status_code == 403
     assert spy.updates == []
 
@@ -136,7 +136,7 @@ def test_misconfigured_factory_returns_503():
         raise WebhookConfigError("Webhook requires GELIO_STATE=supabase + Supabase keys")
 
     client = TestClient(create_app(_boom, SECRET))
-    r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    r = client.post(f"/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
     assert r.status_code == 503
     assert "GELIO_STATE=supabase" in r.text
 
@@ -154,7 +154,7 @@ def test_factory_built_once_and_cached():
 
     client = TestClient(create_app(_factory, SECRET))
     for _ in range(3):
-        client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+        client.post(f"/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
     assert calls["n"] == 1  # built on first request, cached after
 
 
@@ -164,7 +164,7 @@ def test_handler_error_still_200():
             raise RuntimeError("kaboom")
 
     client = TestClient(create_app(Boom(), SECRET))
-    r = client.post(f"/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    r = client.post(f"/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET})
     assert r.status_code == 200  # never 500 → Telegram won't retry-storm
 
 
@@ -226,7 +226,7 @@ def test_real_approve_transitions_state(tmp_path):
     client = TestClient(create_app(svc, SECRET))
 
     r = client.post(
-        f"/telegram/{SECRET}", json=_cb("approve", "2026-06-25-c"), headers={HEADER: SECRET}
+        f"/{SECRET}", json=_cb("approve", "2026-06-25-c"), headers={HEADER: SECRET}
     )
     assert r.status_code == 200
     assert store.get_post("2026-06-25-c").state is PostState.APPROVED
@@ -244,10 +244,44 @@ def test_real_non_admin_ignored(tmp_path):
     client = TestClient(create_app(svc, SECRET))
 
     r = client.post(
-        f"/telegram/{SECRET}",
+        f"/{SECRET}",
         json=_cb("approve", "2026-06-25-c", chat_id="111"),  # not an admin
         headers={HEADER: SECRET},
     )
     assert r.status_code == 200
     assert store.get_post("2026-06-25-c").state is PostState.AWAITING_APPROVAL  # unchanged
     store.close()
+
+
+# --------------------------------------------------------------------------- #
+# Vercel mount: routes must also answer under the /api/telegram prefix
+# --------------------------------------------------------------------------- #
+def test_vercel_prefixed_health(spy_client):
+    _spy, client = spy_client
+    r = client.get("/api/telegram/health")
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_vercel_prefixed_webhook_routes(spy_client):
+    spy, client = spy_client
+    r = client.post(
+        f"/api/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET}
+    )
+    assert r.status_code == 200
+    assert len(spy.updates) == 1
+
+
+def test_vercel_prefixed_bad_secret_rejected(spy_client):
+    spy, client = spy_client
+    r = client.post("/api/telegram/wrong", json=_cb("approve", "p1"), headers={HEADER: SECRET})
+    assert r.status_code == 403
+    assert spy.updates == []
+
+
+def test_no_doubled_telegram_segment(spy_client):
+    """The old /api/telegram/telegram/<secret> path must NOT exist."""
+    _spy, client = spy_client
+    r = client.post(
+        f"/api/telegram/telegram/{SECRET}", json=_cb("approve", "p1"), headers={HEADER: SECRET}
+    )
+    assert r.status_code == 404
