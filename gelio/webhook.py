@@ -25,7 +25,8 @@ import hmac
 import logging
 from typing import Any, Callable, Union
 
-from fastapi import APIRouter, FastAPI, Header, Request, Response
+from fastapi import FastAPI, Header, Request, Response
+from fastapi.routing import APIRoute
 
 from gelio.approval import ApprovalService
 
@@ -69,15 +70,16 @@ def _valid(provided: str | None, expected: str) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
-# Vercel mounts a file at ``api/telegram.py`` under the URL prefix
-# ``/api/telegram`` and passes the FULL path to the ASGI app. So a request to
-# ``/api/telegram/health`` arrives as ``/api/telegram/health`` — routes defined
-# only at ``/health`` would 404. We mount the router at BOTH the root and this
-# prefix, so the same app works locally (``/health``), in tests, AND on Vercel
-# (``/api/telegram/health``) regardless of whether the platform strips the
-# prefix. The webhook itself is ``/{secret}`` (NOT ``/telegram/{secret}``) so
-# the public URL is ``/api/telegram/<secret>`` with no doubled segment.
+# Vercel serves the file ``api/telegram.py`` under the URL prefix
+# ``/api/telegram``. ``vercel.json`` rewrites ALL ``/api/telegram`` +
+# ``/api/telegram/(.*)`` requests to this function; depending on the platform,
+# the ASGI app may then receive the FULL path (``/api/telegram/health``) or the
+# stripped one (``/health``). To be correct in BOTH cases we register every
+# route at the root AND under the ``/api/telegram`` prefix explicitly. The
+# webhook is ``/{secret}`` (NOT ``/telegram/{secret}``), so the public URL is
+# ``/api/telegram/<secret>`` with no doubled segment.
 VERCEL_PREFIX = "/api/telegram"
+_ROUTE_PREFIXES = ("", VERCEL_PREFIX)
 
 
 def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
@@ -90,12 +92,11 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
     update arrives). A :class:`WebhookConfigError` from the factory becomes a
     clear ``503`` instead of a crashed import.
 
-    Routes are exposed at both the root and the ``/api/telegram`` Vercel mount:
+    Routes are registered at both the root and the ``/api/telegram`` Vercel mount:
       * ``GET  /health``            and ``GET  /api/telegram/health``
       * ``POST /{secret}``          and ``POST /api/telegram/{secret}``
     """
     app = FastAPI(title="gelio telegram webhook", docs_url=None, redoc_url=None)
-    router = APIRouter()
     _cache: dict[str, ApprovalService] = {}
 
     def _get_approval() -> ApprovalService:
@@ -105,13 +106,11 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
             _cache["svc"] = svc
         return svc
 
-    @router.get("/health")
     def health() -> dict[str, Any]:
         # Deliberately does NOT build the store/approval service — a health
         # check must work even if state is misconfigured.
         return {"ok": True, "configured": bool(secret)}
 
-    @router.post("/{path_secret}")
     async def telegram(
         path_secret: str,
         request: Request,
@@ -143,9 +142,25 @@ def create_app(approval: ApprovalProvider, secret: str) -> FastAPI:
         # Always 200 fast so Telegram marks the update delivered.
         return Response(status_code=200, content='{"ok":true}', media_type="application/json")
 
-    app.include_router(router)  # local/tests: /health, /{secret}
-    app.include_router(router, prefix=VERCEL_PREFIX)  # Vercel: /api/telegram/...
+    # Register each route explicitly at the root AND the /api/telegram prefix so
+    # it resolves whether Vercel delivers the full or the stripped path.
+    for prefix in _ROUTE_PREFIXES:
+        app.add_api_route(f"{prefix}/health", health, methods=["GET"])
+        app.add_api_route(f"{prefix}/{{path_secret}}", telegram, methods=["POST"])
+
+    _log_routes(app)
     return app
+
+
+def _log_routes(app: FastAPI) -> None:
+    """Log the full route table on cold start — invaluable for debugging Vercel
+    path resolution (visible in the function logs after each deploy)."""
+    table = sorted(
+        (f"{','.join(sorted(r.methods or []))} {r.path}")
+        for r in app.routes
+        if isinstance(r, APIRoute)
+    )
+    logger.info("gelio webhook route table: %s", table)
 
 
 def build_app() -> FastAPI:
