@@ -40,23 +40,51 @@ logger = logging.getLogger("gelio.content_writer")
 
 MAX_ATTEMPTS = 3
 
+# Locked recurring character. The carousel reuses ONE photographic "character",
+# so the subject string is a fixed product decision — NOT left to the LLM, whose
+# per-carousel subject_description could drift in gender, look, or quality.
+# Holding this byte-identical across every slide is exactly what makes the SAME
+# attractive Indian face recur with no drift between slides.
+LOCKED_SUBJECT = (
+    "a photorealistic, good-looking Indian man in his mid-20s with a naturally "
+    "fair-to-wheatish North Indian complexion, well-groomed with a sharp jawline, "
+    "neat short black hair, a warm confident smile and expressive dark brown eyes, "
+    "wearing a crisp, well-fitted trainee airline pilot uniform with a white shirt, "
+    "epaulettes and a navy tie"
+)
+
+# Back-compat alias (older callers / topic_engine import path expect this name).
+DEFAULT_SUBJECT = LOCKED_SUBJECT
+
 # Fixed style suffix appended to every image_prompt so the photographic look
-# stays consistent across days. "no text/letters/logo" suppresses stray AI text.
+# stays consistent across days. "no text/watermark/logo" suppresses stray AI text.
 IMAGE_STYLE_SUFFIX = (
-    "cinematic photography, golden hour, shallow depth of field, navy and gold "
-    "tone, high detail, no text, no watermark, no logo"
+    "cinematic portrait photography, ultra-realistic skin texture with natural "
+    "pores (not plastic, not over-smoothed), soft golden-hour rim lighting, "
+    "shallow depth of field, professional headshot quality, aspirational and "
+    "trustworthy, navy and gold tone, no text, no watermark, no logo"
 )
 
-# Composition rules for the right-column photo zone: the subject must live on
-# the right third with dark open sky on the left so the content column and the
-# gradient mask never fight the photo.
+# Composition rules for the right-column photo zone: keep the subject locked to
+# the RIGHT third so the LEFT two-thirds stay an empty, dark text-safe zone (the
+# compositor renders the whole headline column there). This is what stops the AI
+# subject and the text from colliding.
 IMAGE_COMPOSITION = (
-    "subject on the right third of the frame, looking up or forward, "
-    "golden-hour airport background, left side dark open sky"
+    "portrait framing with the subject's head and shoulders kept entirely within "
+    "the right third of the frame, facing forward or looking up, golden-hour "
+    "airport apron background, the left two-thirds left as dark open sky and empty "
+    "negative space"
 )
 
-# Used when the Brief carries no subject_description (older briefs).
-DEFAULT_SUBJECT = "a young Indian pilot trainee in a crisp white uniform"
+# Negative prompt. FLUX.1 [schnell] is guidance-distilled and exposes NO
+# negative_prompt parameter on either Cloudflare Workers AI or Together, so the
+# negatives are appended to the prompt text — the model's supported form. These
+# kill the ugly / uncanny output (plastic skin, bad anatomy, stray lettering).
+IMAGE_NEGATIVE = (
+    "deformed face, asymmetric eyes, extra fingers, distorted hands, blurry, "
+    "low quality, plastic skin, waxy, overexposed, cartoonish, disfigured, "
+    "bad anatomy, watermark, text, logo, washed out, unnatural skin"
+)
 
 
 class ContentWriterError(RuntimeError):
@@ -225,7 +253,7 @@ class ContentWriter:
             # Force the CTA to come from brand.json — never trust the model here.
             raw["id"] = brief.id
             raw["cta"] = cta_text
-            _apply_image_style(raw, brief)
+            _apply_image_style(raw)
             _normalize_icons(raw)
             _apply_step_numbers(raw, series=series)
 
@@ -258,19 +286,21 @@ class ContentWriter:
         )
 
 
-def _apply_image_style(raw: dict[str, Any], brief: Brief) -> None:
-    """Rebuild each slide's image_prompt around the consistent subject.
+def _apply_image_style(raw: dict[str, Any]) -> None:
+    """Rebuild each slide's image_prompt around the locked recurring subject.
 
-    The LLM supplies only the per-slide scene; the subject description (one
-    continuous "character" per carousel), the right-third composition rules
-    and the fixed brand style suffix are injected here so composition is never
-    left to the model. Mutates ``raw`` in place; tolerant of malformed/partial
-    LLM output (the schema validation that follows rejects anything invalid).
+    The LLM supplies only the per-slide scene; the locked character
+    (:data:`LOCKED_SUBJECT`, identical on every slide so the same face recurs),
+    the right-third composition rules, the fixed brand style suffix and the
+    appended negative prompt are injected here so neither the character nor the
+    composition is ever left to the model. ``brief.subject_description`` is
+    deliberately ignored — the photo character is a product decision, not the
+    LLM's. Mutates ``raw`` in place; tolerant of malformed/partial LLM output
+    (the schema validation that follows rejects anything invalid).
     """
     slides = raw.get("slides")
     if not isinstance(slides, list):
         return
-    subject = (brief.subject_description or "").strip() or DEFAULT_SUBJECT
     for slide in slides:
         if not isinstance(slide, dict):
             continue
@@ -281,7 +311,8 @@ def _apply_image_style(raw: dict[str, Any], brief: Brief) -> None:
                 slide["image_prompt"] = scene
                 continue
             slide["image_prompt"] = (
-                f"{subject}, {scene}, {IMAGE_COMPOSITION}, {IMAGE_STYLE_SUFFIX}"
+                f"{LOCKED_SUBJECT}, {scene}, {IMAGE_COMPOSITION}, "
+                f"{IMAGE_STYLE_SUFFIX}. Avoid: {IMAGE_NEGATIVE}"
             )
 
 

@@ -104,6 +104,9 @@ class CloudflareProvider(ImageProvider):
 
     @_retry
     def fetch(self, prompt: str, width: int, height: int, seed: int) -> bytes:
+        # flux-1-schnell is guidance-distilled and accepts only prompt/seed/steps
+        # — there is NO negative_prompt parameter. Negatives are appended to the
+        # prompt text upstream (see gelio.content_writer.IMAGE_NEGATIVE).
         payload = {"prompt": prompt, "seed": seed, "steps": 4}
         headers = {"Authorization": f"Bearer {self._token}"}
         with httpx.Client(timeout=_HTTP_TIMEOUT) as client:

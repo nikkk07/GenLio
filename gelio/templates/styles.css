@@ -48,10 +48,27 @@ html, body { margin: 0; }
 }
 .role-cta .photo-zone .bg { filter: brightness(.55) saturate(.9); }
 
+/* ---- Text-safe scrim: navy (#0A1F3D) -> transparent, left-to-right ----
+   Sits above the photo's left bleed but below the text (z-index 1 < content's
+   2) so every glyph stays legible over ANY background while the character on
+   the right third stays clear. */
+.text-scrim {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: 66%;
+  z-index: 1;
+  background: linear-gradient(to right,
+    var(--navy) 0%,
+    rgba(10,31,61,.94) 40%,
+    rgba(10,31,61,.62) 70%,
+    rgba(10,31,61,0) 100%);
+}
+.role-cta .text-scrim { width: 78%; }
+
 /* ------------------------------ Top bar -------------------------------- */
 .topbar {
-  position: absolute; top: 52px; left: 64px; right: 64px;
+  position: absolute; top: 80px; left: 80px; right: 80px;
   display: flex; justify-content: space-between; align-items: flex-start;
+  z-index: 3;
 }
 
 /* logo_block: logo (or gold wordmark) + small-caps tagline + divider/spark */
@@ -96,14 +113,17 @@ html, body { margin: 0; }
   padding: 13px 26px 13px 20px; display: inline-flex; align-items: center;
 }
 
-/* --------------------------- Content column ---------------------------- */
+/* --------------------------- Content column ----------------------------
+   Text-safe zone: the whole text column is clamped to the LEFT ~55% of the
+   1080px canvas. With an 80px left inset it ends at ~675px, so it can never
+   reach the right third (the 720px+ subject zone). */
 .content {
-  position: absolute; left: 64px; top: 210px; bottom: 240px;
-  width: 56%;
+  position: absolute; left: 80px; top: 232px; bottom: 248px;
+  width: 55%; max-width: 600px;
   overflow: hidden;
   z-index: 2;
 }
-.role-cta .content { width: 62%; bottom: 130px; }
+.role-cta .content { width: 60%; max-width: 660px; bottom: 140px; }
 
 /* eyebrow_chip: outlined icon square + uppercase eyebrow text */
 .eyebrow-chip { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
@@ -117,8 +137,8 @@ html, body { margin: 0; }
 .eyebrow-chip .chip-icon svg { width: 26px; height: 26px; }
 .eyebrow-chip .chip-text {
   font-family: 'Montserrat', sans-serif; font-weight: 700;
-  text-transform: uppercase; letter-spacing: .24em;
-  font-size: 21px; color: var(--text);
+  text-transform: uppercase; letter-spacing: .26em;
+  font-size: 20px; color: var(--gold);
 }
 
 /* stacked_headline: 2-4 lines, each independently white or gold */
@@ -143,12 +163,17 @@ html, body { margin: 0; }
 /* ------------------------------ Panels --------------------------------- */
 .panel { margin-top: 34px; max-width: 580px; }
 
-/* checklist_card: rounded outlined card with icon rows */
-.panel--checklist {
+/* Shared panel-card look: consistent rounded corners, semi-transparent navy
+   background, hairline gold border and a subtle drop shadow across all types. */
+.panel--checklist, .panel--grid4, .panel--quote {
   border: 1.5px solid var(--hairline);
-  background: rgba(11,61,145,.10);
-  border-radius: 22px; padding: 20px 28px;
+  background: rgba(10,31,61,.72);
+  border-radius: 22px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.35);
 }
+
+/* checklist_card: rounded card with icon rows */
+.panel--checklist { padding: 24px 30px; }
 .panel-title {
   font-family: 'Montserrat', sans-serif; font-weight: 800;
   text-transform: uppercase; letter-spacing: .2em;
@@ -176,6 +201,7 @@ html, body { margin: 0; }
 .panel-row .row-desc { font-size: 19px; line-height: 1.3; color: var(--muted); }
 
 /* icon_grid4: 3-4 columns separated by thin vertical hairlines */
+.panel--grid4 { padding: 26px 30px; }
 .panel--grid4 .grid-cols { display: flex; }
 .panel--grid4 .panel-title { text-align: left; margin-bottom: 20px; }
 .grid-col {
@@ -192,12 +218,10 @@ html, body { margin: 0; }
 }
 .grid-col .col-desc { margin-top: 8px; font-size: 17px; line-height: 1.35; color: var(--muted); }
 
-/* quote_card: glassmorphic card with gold quote + paper-plane glyphs */
+/* quote_card: navy card with gold quote + paper-plane glyphs */
 .panel--quote {
-  background: rgba(255,255,255,.07);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-  border: 1.5px solid var(--hairline);
-  border-radius: 22px; padding: 30px 34px;
+  padding: 30px 34px;
   display: flex; gap: 24px; align-items: flex-start;
 }
 .panel--quote .quote-icons {
@@ -221,8 +245,8 @@ html, body { margin: 0; }
 
 /* ------------------------------ Tip bar -------------------------------- */
 .tip-bar {
-  position: absolute; left: 64px; bottom: 132px;
-  max-width: 58%;
+  position: absolute; left: 80px; bottom: 140px;
+  width: 55%; max-width: 600px;
   display: flex; align-items: center; gap: 18px;
   border: 1.5px solid var(--hairline);
   background: rgba(10,26,51,.72);
@@ -266,9 +290,9 @@ html, body { margin: 0; }
 
 /* ------------------------------- Footer -------------------------------- */
 .footer {
-  position: absolute; right: 64px; bottom: 56px;
+  position: absolute; right: 80px; bottom: 80px;
   display: flex; align-items: center; gap: 16px;
-  z-index: 2;
+  z-index: 3;
 }
 .swipe-pill {
   background: linear-gradient(135deg, var(--gold-light), var(--gold));

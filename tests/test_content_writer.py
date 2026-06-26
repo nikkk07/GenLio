@@ -107,16 +107,26 @@ def test_unknown_icon_coerced_to_star():
     assert icons == ["star", "plane", "wings"]
 
 
-def test_image_prompts_rebuilt_with_subject_and_composition():
+def test_image_prompts_rebuilt_with_locked_subject_and_negatives():
+    from gelio.content_writer import IMAGE_NEGATIVE, LOCKED_SUBJECT
+
+    # The brief's subject_description is deliberately IGNORED: the recurring
+    # character is locked so the same face recurs with no drift between slides.
     brief = _brief().model_copy(
-        update={"subject_description": "a young Indian pilot trainee, early 20s"}
+        update={"subject_description": "a young Indian woman pilot, early 20s"}
     )
     writer = ContentWriter(FakeLLM(slides=9), BRAND)
     content = writer.write(brief, slides=9)
+    prompts = {s.image_prompt for s in content.slides}
+    # Every slide carries the byte-identical locked subject + composition + negatives.
     for slide in content.slides:
-        assert slide.image_prompt.startswith("a young Indian pilot trainee")
+        assert slide.image_prompt.startswith(LOCKED_SUBJECT)
+        assert "a young Indian woman" not in slide.image_prompt  # brief ignored
         assert "right third" in slide.image_prompt
         assert "no watermark" in slide.image_prompt
+        assert f"Avoid: {IMAGE_NEGATIVE}" in slide.image_prompt
+    # The locked subject prefix is identical on every slide (only the scene varies).
+    assert len({p[: len(LOCKED_SUBJECT)] for p in prompts}) == 1
 
 
 def test_series_step_numbers_forced_from_order():
